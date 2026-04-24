@@ -1,59 +1,87 @@
-# Sistema de Ouvidoria — Atenção Básica Suzano
+# Sistema de Mapeamento de Reclamações
 
-> Ferramenta de controle gerencial e auditoria territorial de reclamações e elogios das Unidades de Saúde da Família (USF) do município de Suzano — SP.
+![Python](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python&logoColor=white)
+![Flask](https://img.shields.io/badge/Flask-3.x-black?logo=flask)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![License](https://img.shields.io/badge/Licença-Uso%20Interno-lightgrey)
+![Status](https://img.shields.io/badge/Status-Ativo-brightgreen)
+
+> **Ferramenta de controle gerencial e auditoria territorial de reclamações e elogios das Unidades de Saúde da Família (USF) — Prefeitura Municipal de Suzano · SP**
+
+Sistema que automatiza o ciclo completo de uma ouvidoria pública de saúde: captura de e-mails com documentos anexos, extração por OCR, registro auditável em planilha Excel e dashboard web interativo com visão territorial.
 
 ---
 
-## Visão geral
+## Sumário
 
-O sistema automatiza o ciclo completo de uma ouvidoria de saúde: desde a **captura por e-mail e OCR** até o **controle de prazos legais**, o **encaminhamento às unidades** e o **registro das respostas** — tudo com rastreabilidade auditável em planilha Excel e dashboard web em tempo real.
+- [Visão Geral](#visão-geral)
+- [Funcionalidades](#funcionalidades)
+- [Arquitetura](#arquitetura)
+- [Instalação Rápida](#instalação-rápida)
+- [Configuração](#configuração)
+- [Como Usar](#como-usar)
+- [Dashboard Web](#dashboard-web)
+- [API REST](#api-rest)
+- [Documentação Completa](#documentação-completa)
+- [Estrutura do Projeto](#estrutura-do-projeto)
+- [Stack](#stack)
+
+---
+
+## Visão Geral
 
 ```
-Gmail / Sistema  →  OCR / Extração  →  Excel (auditoria)  →  Dashboard web
-                                           ↑ PATCH API ↑
-                                     Formulário manual
+E-mail Gmail ──► Extração OCR ──► ouvidorias.xlsx ──► Dashboard Web
+                 (PDF + imagem)     (auditoria)       localhost:7731
+                      │                  ▲
+                      │                  │ API REST
+                      └─ Formulário manual (quando OCR falha)
 ```
+
+O sistema funciona em dois modos:
+
+| Modo | Descrição |
+|------|-----------|
+| **Automático** | Lê e-mails, extrai dados de PDFs/imagens por OCR, classifica e grava na planilha |
+| **Manual** | Dashboard web com formulário para entrada quando o OCR falha ou para registros diretos |
 
 ---
 
 ## Funcionalidades
 
-### Processamento automático
-- Leitura de e-mails recebidos via **IMAP/Gmail**
-- Extração de dados de **PDFs e imagens** com `pdfplumber` + `pytesseract`
-- Classificação automática como **ouvidoria** ou **resposta da unidade**
-- Normalização de nomes de USF por catálogo com aliases configuráveis
-- Geração e atualização da planilha `ouvidorias.xlsx`
-- Agendador de cobranças automáticas por e-mail ao gestor de unidade
+### 🔄 Processamento automático
+- Leitura de caixa de entrada Gmail via **IMAP**
+- Extração de dados de **PDFs e imagens** (pdfplumber + pytesseract)
+- Classificação automática: **ouvidoria nova** vs **resposta da unidade**
+- Normalização de nomes de USF via catálogo com aliases configuráveis
+- Gravação automática em `ouvidorias.xlsx` com formatação institucional
 
-### Dashboard web (`localhost:7731`)
-Painel dark-mode servido localmente via Flask, sem dependência de servidor externo.
+### 📊 Dashboard web — `localhost:7731`
+- **Command Center** — KPIs globais, ranking por unidade, tabela filtrável com exportação CSV
+- **Triagem** — Inbox priorizado por urgência legal (vencido → crítico → atenção → no prazo)
+- **Mapa territorial** — Mapa esquemático de Suzano com 12 pins coloridos por status
+- **Histórico** — Tabela de respondidas com tempo de resposta e indicador de prazo
 
-| Aba | Descrição |
-|-----|-----------|
-| **Dashboard** | KPIs, ranking por unidade, tabela filtrável, linha do tempo |
-| **Triagem** | Inbox priorizado por urgência (vencido → crítico → atenção → ok) |
-| **Mapa** | Mapa esquemático de Suzano com pins coloridos por status |
-| **Histórico** | Tabela de ouvidorias respondidas com tempo de resposta |
+### ⚖️ Controle de prazos — Lei 13.460/2017
+| Tier | Critério | Visual |
+|------|----------|--------|
+| Vencida | Prazo expirado | Vermelho pulsante |
+| Urgente | ≤ 3 dias restantes | Vermelho |
+| Atenção | ≤ 10 dias restantes | Amarelo |
+| No prazo | > 10 dias | Verde |
+| Resolvida | Respondida / Fechada | Cinza |
 
-### Controle de prazos (Lei 13.460/2017)
-- Prazo padrão de 30 dias corridos
-- Classificação automática: **No prazo** · **Atenção (≤10d)** · **Urgente (≤3d)** · **Vencida**
-- Alerta visual e pulso animado nas unidades com ouvidorias vencidas
+### 🛠️ Ações de gestão (dashboard)
+- **Nova ouvidoria** — Formulário completo com protocolo automático
+- **Encaminhar** — Muda status para `ENCAMINHADA` com confirmação
+- **Registrar resposta** — Registra data e muda status para `RESPONDIDA`
+- **Editar** — Altera qualquer campo de ouvidoria existente
+- **Exportar CSV** — Exporta lista filtrada atual
 
-### Formulário manual
-Quando o OCR falha ou para entrada manual, o dashboard oferece formulário completo:
-- Protocolo (gerado automaticamente se omitido: `MANUAL-{timestamp}`)
-- Reclamante / anônimo
-- Unidade (select com as 12 USFs cadastradas)
-- Data de recebimento + prazo automático (+30 dias)
-- Assunto, relato, canal, status
-
-### Ações de gestão
-- **Encaminhar** → muda status para `ENCAMINHADA` com confirmação
-- **Registrar resposta** → registra data de resposta, muda status para `RESPONDIDA`
-- **Editar** → edita qualquer campo de ouvidoria existente
-- **Exportar CSV** → exporta a lista filtrada atual
+### 📧 Agendador de cobranças
+- Envio automático de e-mails de cobrança aos gestores de unidade
+- Intervalo mínimo configurável entre cobranças (evita spam)
+- Log completo de cobranças enviadas
 
 ---
 
@@ -61,182 +89,177 @@ Quando o OCR falha ou para entrada manual, o dashboard oferece formulário compl
 
 ```
 ouvidoria_bot/
-├── ouvidoriabot.py          # App Tkinter principal (3 abas: Processar, Planilha, Config)
-├── dashboard_server.py      # Servidor Flask (porta 7731) — API REST + serve dashboard
-├── constantes.py            # Catálogo de USFs, colunas Excel, regras de classificação
-├── banco.py                 # SQLite com e-mails dos gestores de unidade
-├── cobrar.py                # Motor de cobranças por e-mail
-├── cobranca_gui.py          # Interface de cobranças
-├── ouvidoriagmail.py        # Leitor IMAP/Gmail
-├── run.py                   # Ponto de entrada alternativo
 │
-└── dashboard/               # Frontend React (Babel standalone, sem build step)
-    ├── data.jsx             # Camada de dados: DATASET global, API fetch/create/update
-    ├── command-center.jsx   # Painel de KPIs, tabela gerencial, ranking
-    ├── split-triagem.jsx    # Inbox de triagem, formulários, histórico
-    ├── mapa-unidades.jsx    # Mapa esquemático com pins de status
-    └── design-canvas.jsx    # Wrapper visual (compat)
+├── ouvidoriabot.py          # ► App principal Tkinter (3 abas)
+├── dashboard_server.py      # ► Servidor Flask porta 7731 (API + frontend)
+├── constantes.py            # ► Catálogo USFs, colunas Excel, classificadores
+├── banco.py                 # ► SQLite — e-mails dos gestores
+├── ouvidoriagmail.py        # ► Leitor IMAP/Gmail
+├── cobrar.py                # ► Motor de cobranças por e-mail
+├── cobranca_gui.py          # ► Interface de cobranças
+├── run.py                   # ► Ponto de entrada CLI
+│
+├── dashboard/               # ► Frontend React (sem build step)
+│   ├── data.jsx             #   Camada de dados e API client
+│   ├── command-center.jsx   #   Painel KPIs + tabela gerencial
+│   ├── split-triagem.jsx    #   Inbox + formulários + histórico
+│   └── mapa-unidades.jsx    #   Mapa territorial com pins
+│
+├── docs/                    # ► Documentação
+│   ├── INSTALACAO.md
+│   ├── CONFIGURACAO.md
+│   ├── USO.md
+│   └── API.md
+│
+├── icons/                   # ► Ícones do aplicativo
+├── scripts/                 # ► Utilitários (geração de ícones)
+├── config.json.example      # ► Template de configuração
+└── requirements.txt         # ► Dependências Python
 ```
 
-### Fluxo da API REST
-
-| Método | Rota | Ação |
-|--------|------|------|
-| `GET` | `/api/ouvidorias` | Lista todas as ouvidorias da planilha |
-| `POST` | `/api/ouvidorias` | Cria nova ouvidoria (append na planilha) |
-| `PATCH` | `/api/ouvidorias/{protocolo}` | Atualiza campos de ouvidoria existente |
-
 ---
 
-## Pré-requisitos
+## Instalação Rápida
 
-| Componente | Versão mínima |
-|------------|---------------|
-| Python | 3.9+ |
-| Tesseract OCR | 5.x |
-| Poppler (`pdf2image`) | qualquer |
-
----
-
-## Instalação
-
-### Linux / macOS
 ```bash
-# 1. Clonar o repositório
-git clone https://github.com/<org>/ouvidoria-bot.git
-cd ouvidoria-bot
+# 1. Clonar
+git clone https://github.com/gabrielryan00-png/Sistema-de-mapeamento-de-reclama-es.git
+cd Sistema-de-mapeamento-de-reclama-es
 
-# 2. Ambiente virtual
-python3 -m venv venv
-source venv/bin/activate
+# 2. Instalar tudo (Linux/macOS)
+make install
 
-# 3. Dependências Python
-pip install -r requirements.txt
-
-# 4. Tesseract
-sudo apt install tesseract-ocr tesseract-ocr-por poppler-utils   # Debian/Ubuntu
-brew install tesseract poppler                                     # macOS
-
-# 5. Configuração
+# 3. Configurar
 cp config.json.example config.json
-# Edite config.json com suas credenciais de e-mail
+# Edite config.json com seu e-mail e senha de app
+
+# 4. Iniciar
+python ouvidoriabot.py
 ```
 
-### Windows
-```powershell
-# Instalar Tesseract: https://github.com/UB-Mannheim/tesseract/wiki
-# Instalar Poppler: https://github.com/oschwartz10612/poppler-windows
-
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
-copy config.json.example config.json
-# Editar config.json — ajustar tesseract_path para o caminho correto
-```
+> **Windows:** veja [docs/INSTALACAO.md](docs/INSTALACAO.md)  
+> **Tesseract OCR** e **Poppler** precisam ser instalados separadamente — instruções em [docs/INSTALACAO.md](docs/INSTALACAO.md)
 
 ---
 
-## Configuração (`config.json`)
+## Configuração
 
-```jsonc
+Copie `config.json.example` para `config.json` e preencha:
+
+```json
 {
-  "email": "ouvidoria@exemplo.gov.br",   // Conta Gmail da ouvidoria
-  "senha_app": "xxxx xxxx xxxx xxxx",    // Senha de app (não a senha da conta)
-  "remetente_ouvidoria": "",             // Filtro de remetente (vazio = todos)
-  "pasta_base": "ouvidorias",            // Pasta raiz dos dados
-  "prazo_dias": "30",                    // Prazo padrão em dias
-  "tesseract_path": "C:\\...\\tesseract.exe",
+  "email":               "ouvidoria@exemplo.gov.br",
+  "senha_app":           "xxxx xxxx xxxx xxxx",
+  "remetente_ouvidoria": "",
+  "pasta_base":          "ouvidorias",
+  "prazo_dias":          "30",
+  "tesseract_path":      "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
   "remover_arquivos_depois": false,
-  "scheduler_enabled": false,            // Agendador automático
+  "scheduler_enabled":   false,
   "scheduler_interval_min": 60
 }
 ```
 
-**Senha de app Gmail:** Conta Google → Segurança → Verificação em duas etapas → Senhas de app.
+> ⚠️ `config.json` está no `.gitignore` — **nunca versionar credenciais**
+
+Documentação completa: [docs/CONFIGURACAO.md](docs/CONFIGURACAO.md)
 
 ---
 
-## Execução
+## Como Usar
 
-```bash
-# Ativar venv
-source venv/bin/activate   # Linux/macOS
-venv\Scripts\activate      # Windows
+1. Inicie o sistema: `python ouvidoriabot.py`
+2. O servidor do dashboard sobe automaticamente em `http://localhost:7731`
+3. Use a aba **Processar** para buscar e-mails no período desejado
+4. Clique em **🌐 Dashboard Web** para abrir o painel no navegador
+5. Use o botão **+ Nova Ouvidoria** para inserir manualmente quando o OCR falhar
 
-# Iniciar o sistema
-python ouvidoriabot.py
-```
-
-O dashboard web sobe automaticamente em `http://localhost:7731`.
-Clique no botão **Dashboard Web** na interface Tkinter para abrir no navegador.
+Guia completo: [docs/USO.md](docs/USO.md)
 
 ---
 
-## Unidades cadastradas
+## Dashboard Web
 
-O sistema contempla as 12 USFs do município de Suzano:
+O dashboard é uma aplicação React servida pelo Flask, acessível em `http://localhost:7731`.
 
-| ID | Unidade | Bairro |
-|----|---------|--------|
-| u1 | USF Vereador Marsal Lopes Rosa | Vila Amorim |
-| u2 | USF Recanto São José | Recanto São José |
-| u3 | USF Jardim do Lago | Jardim do Lago |
-| u4 | USF Marcelino Maria Rodrigues | Jardim Brasil |
-| u5 | USF Maria Jose Lima Souza | Jardim Ikeda |
-| u6 | USF Dr. Eduardo Nakamura | Cidade Boa Vista |
-| u7 | USF Jardim Europa | Jardim Europa |
-| u8 | USF Jardim Revista | Jardim Revista |
-| u9 | USF Vereador Gregório Bonifácio da Silva | Vila Fátima |
-| u10 | USF Onesia Benedita Miguel | Jardim Suzanópolis |
-| u11 | USF Antonio Marques de Carvalho | Jardim Maité |
-| u12 | USF Manuel Evangelista de Oliveira | Jardim São José |
+| Vista | Acesso | Descrição |
+|-------|--------|-----------|
+| Command Center | Aba Dashboard | KPIs, gráficos, tabela gerencial |
+| Triagem | Aba Triagem | Inbox priorizado por urgência |
+| Mapa | Botão ⊕ Mapa | Mapa de Suzano com pins das USFs |
+| Histórico | Segmento Resolvidas | Tabela de ouvidorias respondidas |
+
+O painel atualiza os dados automaticamente a cada 60 segundos.
 
 ---
 
-## Estrutura de dados (`ouvidorias.xlsx`)
+## API REST
 
-| Coluna | Descrição |
-|--------|-----------|
-| Protocolo | Identificador único (ex: `2026-SZN-000123`) |
-| Unidade | Nome oficial da USF |
-| Data Recebimento | Data de entrada da ouvidoria |
-| Prazo Resposta | Prazo legal (recebimento + 30 dias) |
-| Assunto | Categoria da reclamação/elogio |
-| Status | `PENDENTE` · `ENCAMINHADA` · `RESPONDIDA` · `FECHADA` · `REABERTA` |
-| Data Respondida | Data em que a unidade respondeu |
-| Arquivo | Nome do PDF original |
-| Arquivo Resposta | Nome do PDF de resposta |
-| Observações | Relato completo |
-| Data Última Cobrança | Controle de cobranças enviadas |
-| Reclamante | Nome (ou vazio para anônimo) |
-| Canal | `E-mail` · `Presencial` · `Telefone 156` · `WhatsApp` · `Sistema` |
+Servidor local em `http://localhost:7731/api`
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| `GET` | `/api/ouvidorias` | Lista todas as ouvidorias |
+| `POST` | `/api/ouvidorias` | Cria nova ouvidoria |
+| `PATCH` | `/api/ouvidorias/{protocolo}` | Atualiza campos |
+
+Documentação completa: [docs/API.md](docs/API.md)
 
 ---
 
-## Segurança e privacidade
+## Documentação Completa
 
-- `config.json` está no `.gitignore` — **nunca versionar credenciais**
-- `ouvidorias/` e `ouvidorias.db` estão no `.gitignore` — dados de cidadãos não versionados
-- O servidor Flask escuta apenas em `127.0.0.1` (loopback) — não exposto na rede
-- Reclamantes anônimos são tratados sem armazenar nome
+| Documento | Conteúdo |
+|-----------|----------|
+| [docs/INSTALACAO.md](docs/INSTALACAO.md) | Instalação detalhada Linux, macOS e Windows |
+| [docs/CONFIGURACAO.md](docs/CONFIGURACAO.md) | Todas as opções de config.json e banco de dados |
+| [docs/USO.md](docs/USO.md) | Guia de uso completo: OCR, dashboard, cobranças |
+| [docs/API.md](docs/API.md) | Referência completa da API REST |
 
 ---
 
-## Stack tecnológica
+## Unidades Cadastradas
+
+12 USFs do município de Suzano, SP:
+
+| Unidade | Bairro |
+|---------|--------|
+| USF Vereador Marsal Lopes Rosa | Vila Amorim |
+| USF Recanto São José | Recanto São José |
+| USF Jardim do Lago | Jardim do Lago |
+| USF Marcelino Maria Rodrigues | Jardim Brasil |
+| USF Maria Jose Lima Souza | Jardim Ikeda |
+| USF Dr. Eduardo Nakamura | Cidade Boa Vista |
+| USF Jardim Europa | Jardim Europa |
+| USF Jardim Revista | Jardim Revista |
+| USF Vereador Gregório Bonifácio da Silva | Vila Fátima |
+| USF Onesia Benedita Miguel | Jardim Suzanópolis |
+| USF Antonio Marques de Carvalho | Jardim Maité |
+| USF Manuel Evangelista de Oliveira | Jardim São José |
+
+---
+
+## Stack
 
 | Camada | Tecnologia |
-|--------|-----------|
-| Desktop | Python 3 · Tkinter · tkcalendar |
-| OCR | pdfplumber · pytesseract · pdf2image · Pillow |
+|--------|------------|
+| Interface desktop | Python · Tkinter · tkcalendar |
+| OCR e extração | pdfplumber · pytesseract · pdf2image · Pillow |
 | E-mail | imapclient · pyzmail · smtplib |
-| Dados | openpyxl · SQLite |
-| API | Flask · flask-cors |
-| Agendador | APScheduler |
-| Frontend | React 18 · Babel standalone · CSS (oklch) |
+| Dados | openpyxl · SQLite3 |
+| Servidor web | Flask · flask-cors |
+| Agendamento | APScheduler |
+| Dashboard | React 18 · Babel standalone · CSS oklch |
 
 ---
 
-## Licença
+## Segurança
 
-Uso interno — Prefeitura Municipal de Suzano · Secretaria Municipal de Saúde
-Desenvolvido para a Coordenação de Atenção Básica
+- `config.json` está no `.gitignore` — credenciais nunca versionadas
+- `ouvidorias/` e `ouvidorias.db` estão no `.gitignore` — dados de cidadãos nunca versionados
+- O servidor Flask escuta apenas em `127.0.0.1` — não exposto na rede local
+- Reclamantes anônimos tratados sem armazenar nome
+
+---
+
+*Desenvolvido para a Coordenação de Atenção Básica — Secretaria Municipal de Saúde de Suzano · SP*
