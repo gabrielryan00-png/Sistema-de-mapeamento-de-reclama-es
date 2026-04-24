@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Ouvidoria Ecosystem
+Comment=Launcher para o ecossistema de Ouvidoria (ouvidoriabot + cobrança)
+Exec=/home/drelima/ouvidoria_bot/venv/bin/python /home/drelima/ouvidoria_bot/run.py gui
+Path=/home/drelima/ouvidoria_bot
+Icon=/home/drelima/ouvidoria_bot/icons/ouvidoria_icon.png
+Terminal=false
+Categories=Utility;Office;
+StartupNotify=true

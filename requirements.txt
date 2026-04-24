@@ -1,0 +1,11 @@
+openpyxl
+pdfplumber
+pytesseract
+pdf2image
+pillow
+imapclient
+pyzmail
+tkcalendar
+APScheduler
+flask
+flask-cors

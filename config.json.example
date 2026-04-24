@@ -1,0 +1,11 @@
+{
+  "email": "ouvidoria@exemplo.gov.br",
+  "senha_app": "xxxx xxxx xxxx xxxx",
+  "remetente_ouvidoria": "sistemas@saude.sp.gov.br",
+  "pasta_base": "ouvidorias",
+  "prazo_dias": "30",
+  "tesseract_path": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+  "remover_arquivos_depois": false,
+  "scheduler_enabled": false,
+  "scheduler_interval_min": 60
+}

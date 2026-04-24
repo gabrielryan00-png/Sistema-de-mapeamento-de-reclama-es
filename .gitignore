@@ -1,0 +1,42 @@
+# ── Credenciais e configuração local ──────────────────────────────────────────
+config.json
+config_cobranca.json
+
+# ── Dados operacionais (nunca versionar) ──────────────────────────────────────
+ouvidorias/
+ouvidorias.db
+*.xlsx
+*.xls
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+logs/
+*.log
+log.txt
+ouvidoria_bot.log
+
+# ── Ambiente Python ────────────────────────────────────────────────────────────
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Arquivos temporários e de backup ──────────────────────────────────────────
+*cópia*
+*copia*
+*.bak
+*.tmp
+*.swp
+*~
+
+# ── IDE / OS ───────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
