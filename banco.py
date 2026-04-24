@@ -27,22 +27,23 @@ def criar_tabela():
     conn.close()
 
 # ==============================
-# INSERIR DADOS (SEUS 12 EMAILS)
+# INSERIR DADOS — configure os e-mails institucionais das unidades
 # ==============================
 def inserir_unidades():
+    # Substitua os valores abaixo pelos e-mails reais das unidades
     dados = {
-        "USF Dr. Eduardo Nakamura": "usfjardimnakamura@ints.org.br",
-        "USF Jardim Europa": "usfjardimeuropa@ints.org.br",
-        "USF Onesia Benedita Miguel": "usfjardimsuzanopolis@ints.org",
-        "USF Marcelino Maria Rodrigues": "usfjardimbrasil@ints.org.br",
-        "USF Manuel Evangelista de Oliveira": "usfjardimsaojose@ints.org.br",
-        "USF Recanto São José": "usfrecantosaojose@ints.org.br",
-        "USF Vereador Gregório Bonifácio da Silva": "usfvilafatima@ints.org.br",
-        "USF Jardim do Lago": "usfjardimdolago@ints.org.br",
-        "USF Antonio Marques de Carvalho": "usfjardimmaite@ints.org.br",
-        "USF Maria Jose Lima Souza": "usfjardimikeda@ints.org.br",
-        "USF Jardim Revista": "usfjardimrevista@ints.org.br",
-        "USF Vereador Marsal Lopes Rosa": "usfvilaamorim@ints.org.br",
+        "USF Dr. Eduardo Nakamura":                    "",
+        "USF Jardim Europa":                           "",
+        "USF Onesia Benedita Miguel":                  "",
+        "USF Marcelino Maria Rodrigues":               "",
+        "USF Manuel Evangelista de Oliveira":          "",
+        "USF Recanto São José":                        "",
+        "USF Vereador Gregório Bonifácio da Silva":    "",
+        "USF Jardim do Lago":                          "",
+        "USF Antonio Marques de Carvalho":             "",
+        "USF Maria Jose Lima Souza":                   "",
+        "USF Jardim Revista":                          "",
+        "USF Vereador Marsal Lopes Rosa":              "",
     }
 
     conn = conectar()

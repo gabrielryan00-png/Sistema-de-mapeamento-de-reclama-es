@@ -29,8 +29,8 @@ if not logger.handlers:
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-EMAIL = "ouvidoriasryan@gmail.com"
-SENHA = "pmxn kjcq qgnd lvvp"
+EMAIL = ""   # Configurar em config.json → "email"
+SENHA = ""   # Configurar em config.json → "senha_app"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PLANILHA = os.path.join(BASE_DIR, "ouvidorias", "ouvidorias.xlsx")

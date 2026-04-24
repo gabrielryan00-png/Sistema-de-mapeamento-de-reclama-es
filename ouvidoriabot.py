@@ -104,8 +104,8 @@ def _norm_cached(texto: str) -> str:
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
 
 CONFIG_PADRAO = {
-    "email":               "ouvidoriasryan@gmail.com",
-    "senha_app":           "pmxn kjcq qgnd lvvp",
+    "email":               "",
+    "senha_app":           "",
     "remetente_ouvidoria": "",
     "pasta_base":          "ouvidorias",
     "prazo_dias":          10,

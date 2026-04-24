@@ -21,12 +21,12 @@ from openpyxl.utils import get_column_letter
 # =========================
 # CONFIG GMAIL
 # =========================
-EMAIL     = "ouvidoriasryan@gmail.com"
-SENHA_APP = "pmxn kjcq qgnd lvvp"  # ← Senha de app Google (16 caracteres)
-# Para gerar: myaccount.google.com -> Segurança -> Senhas de app
+EMAIL     = ""   # Configurar em config.json → "email"
+SENHA_APP = ""   # Configurar em config.json → "senha_app"
+# Para gerar a senha de app: myaccount.google.com → Segurança → Senhas de app
 # (requer verificação em duas etapas ativada)
 
-REMETENTE_OUVIDORIA = ""  # ← e-mail de quem envia as ouvidorias (deixe "" para qualquer)
+REMETENTE_OUVIDORIA = ""  # e-mail de quem envia as ouvidorias (deixe "" para qualquer)
 
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
