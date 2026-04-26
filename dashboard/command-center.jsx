@@ -137,6 +137,7 @@ function CommandCenter({ standalone = false }) {
   const [busca,         setBusca]         = React.useState('');
   const [sort,          setSort]          = React.useState({ col:'diasRestantes', dir:'asc' });
   const [sel,           setSel]           = React.useState(null);
+  const [showLembretes, setShowLembretes] = React.useState(false);
 
   const filtered = React.useMemo(() => {
     let arr = DATASET;
@@ -279,6 +280,12 @@ function CommandCenter({ standalone = false }) {
         <button onClick={exportCSV} style={{ background:'transparent', color:CC.text,
           border:`1px solid ${CC.border}`, borderRadius:6, padding:'6px 12px',
           fontSize:12, cursor:'pointer', fontFamily:CC.fontSans, letterSpacing:0.2 }}>Exportar CSV</button>
+        <button onClick={() => setShowLembretes(true)} style={{
+          background:`oklch(0.28 0.08 230)`, color:CC.accent,
+          border:`1px solid oklch(0.38 0.10 230)`, borderRadius:6, padding:'6px 12px',
+          fontSize:12, cursor:'pointer', fontFamily:CC.fontSans, letterSpacing:0.2, fontWeight:500 }}>
+          📧 Enviar Lembretes
+        </button>
       </div>
 
       {/* Abas */}
@@ -308,6 +315,116 @@ function CommandCenter({ standalone = false }) {
           TH={TH} sel={sel} setSel={setSel}
         />
       )}
+      {showLembretes && <LembretesModal onClose={() => setShowLembretes(false)} />}
+    </div>
+  );
+}
+
+function LembretesModal({ onClose }) {
+  const [fase, setFase] = React.useState('confirm'); // confirm | loading | result
+  const [resultado, setResultado] = React.useState(null);
+  const [logLines, setLogLines]   = React.useState([]);
+
+  async function enviar() {
+    setFase('loading');
+    try {
+      const res = await fetch('/api/cobrar', { method: 'POST' });
+      const json = await res.json();
+      setResultado(json);
+      setLogLines((json.log || []).slice(-20));
+      setFase('result');
+    } catch (e) {
+      setResultado({ ok: false, error: String(e) });
+      setFase('result');
+    }
+  }
+
+  const overlay = {
+    position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', zIndex:9000,
+    display:'flex', alignItems:'center', justifyContent:'center',
+  };
+  const box = {
+    background:CC.surface, border:`1px solid ${CC.border}`, borderRadius:12,
+    padding:'28px 32px', width:520, maxWidth:'92vw', maxHeight:'80vh',
+    display:'flex', flexDirection:'column', gap:20,
+    boxShadow:'0 24px 60px rgba(0,0,0,0.5)',
+  };
+  const btnPrimary = {
+    background:CC.accent, color:'oklch(0.15 0.01 230)', border:'none',
+    borderRadius:6, padding:'9px 20px', fontSize:13, fontWeight:600,
+    cursor:'pointer', fontFamily:CC.fontSans,
+  };
+  const btnSec = {
+    background:'transparent', color:CC.textDim, border:`1px solid ${CC.border}`,
+    borderRadius:6, padding:'9px 20px', fontSize:13, cursor:'pointer',
+    fontFamily:CC.fontSans,
+  };
+
+  return (
+    <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={box}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span style={{ fontSize:15, fontWeight:600, letterSpacing:0.2 }}>📧 Enviar Lembretes</span>
+          <button onClick={onClose} style={{ background:'transparent', border:'none',
+            color:CC.textDim, cursor:'pointer', fontSize:16 }}>✕</button>
+        </div>
+
+        {fase === 'confirm' && (
+          <>
+            <p style={{ fontSize:13, color:CC.textDim, lineHeight:1.6 }}>
+              Envia e-mails de cobrança para as unidades com ouvidorias <strong style={{color:CC.crit}}>vencidas</strong> ou
+              {' '}<strong style={{color:CC.warn}}>pendentes há mais de 3 dias</strong>, respeitando o intervalo mínimo
+              de 7 dias entre cobranças por unidade.
+            </p>
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+              <button style={btnSec} onClick={onClose}>Cancelar</button>
+              <button style={btnPrimary} onClick={enviar}>Confirmar envio</button>
+            </div>
+          </>
+        )}
+
+        {fase === 'loading' && (
+          <div style={{ textAlign:'center', padding:'20px 0', color:CC.textDim, fontSize:13 }}>
+            <div style={{ fontSize:22, marginBottom:12 }}>⏳</div>
+            Enviando e-mails de cobrança…
+          </div>
+        )}
+
+        {fase === 'result' && resultado && (
+          <>
+            {resultado.ok ? (
+              <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                  {[
+                    ['Enviados',      resultado.stats?.total_enviadas,         CC.ok],
+                    ['Sem e-mail',    resultado.stats?.sem_email,              CC.warn],
+                    ['Erros envio',   resultado.stats?.erros_envio,            CC.crit],
+                    ['Já cobrados',   resultado.stats?.recobranca_pulada,      CC.textDim],
+                  ].map(([label, val, color]) => (
+                    <div key={label} style={{ background:CC.surface2, borderRadius:8,
+                      padding:'10px 14px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                      <span style={{ fontSize:12, color:CC.textDim }}>{label}</span>
+                      <span style={{ fontSize:18, fontWeight:700, color, fontFamily:CC.fontMono }}>{val ?? 0}</span>
+                    </div>
+                  ))}
+                </div>
+                {logLines.length > 0 && (
+                  <div style={{ background:'oklch(0.14 0.004 80)', borderRadius:6, padding:'10px 12px',
+                    fontSize:11, fontFamily:CC.fontMono, color:CC.textDim, maxHeight:160,
+                    overflowY:'auto', lineHeight:1.7, whiteSpace:'pre-wrap' }}>
+                    {logLines.join('\n')}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p style={{ fontSize:13, color:CC.crit }}>❌ {resultado.error}</p>
+            )}
+            <div style={{ display:'flex', justifyContent:'flex-end' }}>
+              <button style={btnPrimary} onClick={onClose}>Fechar</button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

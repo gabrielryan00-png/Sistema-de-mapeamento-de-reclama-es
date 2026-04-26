@@ -151,6 +151,18 @@ root.render(<App />);
         ok = _patch_row(proto, updates)
         return jsonify({'ok': ok}), 200 if ok else 404
 
+    @app.route('/api/cobrar', methods=['POST', 'OPTIONS'])
+    def api_cobrar():
+        if request.method == 'OPTIONS':
+            return '', 204
+        try:
+            import cobrar as _cobrar
+            logs = []
+            stats = _cobrar.executar_cobranca(log_func=logs.append)
+            return jsonify({'ok': True, 'stats': stats, 'log': logs})
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)}), 500
+
     # ── Excel write helpers ────────────────────────────────────────────────────
     _EXTRA_COLS = ['Reclamante', 'Canal']
 

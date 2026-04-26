@@ -1,4 +1,5 @@
 import os
+import json
 import smtplib
 import logging
 from datetime import datetime, timedelta
@@ -29,10 +30,19 @@ if not logger.handlers:
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-EMAIL = ""   # Configurar em config.json → "email"
-SENHA = ""   # Configurar em config.json → "senha_app"
+EMAIL = ""   # fallback — carregado de config.json em tempo de execução
+SENHA = ""   # fallback — carregado de config.json em tempo de execução
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _creds():
+    """Retorna (email, senha) lidos de config.json no momento da chamada."""
+    try:
+        with open(os.path.join(BASE_DIR, 'config.json'), encoding='utf-8') as f:
+            cfg = json.load(f)
+        return cfg.get('email', EMAIL), cfg.get('senha_app', SENHA)
+    except Exception:
+        return EMAIL, SENHA
 PLANILHA = os.path.join(BASE_DIR, "ouvidorias", "ouvidorias.xlsx")
 
 # Configurações de cobrança
@@ -44,15 +54,16 @@ def enviar_email(destino, assunto, corpo, log_func=None):
     """Envia email com tratamento de erro."""
     if log_func is None:
         log_func = lambda msg: logger.info(msg)
-    
+
+    email, senha = _creds()
     try:
         msg = EmailMessage()
         msg["Subject"] = assunto
-        msg["From"] = EMAIL
+        msg["From"] = email
         msg["To"] = destino
         msg.set_content(corpo)
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(EMAIL, SENHA)
+            smtp.login(email, senha)
             smtp.send_message(msg)
         return True
     except Exception as e:
