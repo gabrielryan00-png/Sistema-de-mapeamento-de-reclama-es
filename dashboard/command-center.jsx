@@ -136,8 +136,9 @@ function CommandCenter({ standalone = false }) {
   const [filtroPrazo,   setFiltroPrazo]   = React.useState('all');
   const [busca,         setBusca]         = React.useState('');
   const [sort,          setSort]          = React.useState({ col:'diasRestantes', dir:'asc' });
-  const [sel,           setSel]           = React.useState(null);
-  const [showLembretes, setShowLembretes] = React.useState(false);
+  const [sel,            setSel]           = React.useState(null);
+  const [showLembretes,  setShowLembretes] = React.useState(false);
+  const [showBuscarEmails, setShowBuscarEmails] = React.useState(false);
 
   const filtered = React.useMemo(() => {
     let arr = DATASET;
@@ -280,6 +281,12 @@ function CommandCenter({ standalone = false }) {
         <button onClick={exportCSV} style={{ background:'transparent', color:CC.text,
           border:`1px solid ${CC.border}`, borderRadius:6, padding:'6px 12px',
           fontSize:12, cursor:'pointer', fontFamily:CC.fontSans, letterSpacing:0.2 }}>Exportar CSV</button>
+        <button onClick={() => setShowBuscarEmails(true)} style={{
+          background:`oklch(0.26 0.06 150)`, color:`oklch(0.82 0.13 150)`,
+          border:`1px solid oklch(0.38 0.10 150)`, borderRadius:6, padding:'6px 12px',
+          fontSize:12, cursor:'pointer', fontFamily:CC.fontSans, letterSpacing:0.2, fontWeight:500 }}>
+          📥 Buscar E-mails
+        </button>
         <button onClick={() => setShowLembretes(true)} style={{
           background:`oklch(0.28 0.08 230)`, color:CC.accent,
           border:`1px solid oklch(0.38 0.10 230)`, borderRadius:6, padding:'6px 12px',
@@ -315,7 +322,8 @@ function CommandCenter({ standalone = false }) {
           TH={TH} sel={sel} setSel={setSel}
         />
       )}
-      {showLembretes && <LembretesModal onClose={() => setShowLembretes(false)} />}
+      {showLembretes    && <LembretesModal    onClose={() => setShowLembretes(false)} />}
+      {showBuscarEmails && <BuscarEmailsModal onClose={() => setShowBuscarEmails(false)} />}
     </div>
   );
 }
@@ -666,6 +674,7 @@ function CCSelect({ value, onChange, label, options }) {
 
 function CCDetail({ item, onClose, onVerHistorico }) {
   const [showResposta, setShowResposta] = React.useState(false);
+  const [showDelete,   setShowDelete]   = React.useState(false);
   if (!item) return null;
   const assunto       = ASSUNTOS.find(a => a.key === item.assuntoKey) || ASSUNTOS[0];
   const tier          = urgencyTier(item.diasRestantes, item.status);
@@ -746,22 +755,29 @@ function CCDetail({ item, onClose, onVerHistorico }) {
         </div>
       </div>
 
-      <div style={{ padding:'12px 18px', borderTop:`1px solid ${CC.border}`, display:'flex', gap:8 }}>
+      <div style={{ padding:'12px 18px', borderTop:`1px solid ${CC.border}`, display:'flex', gap:8, flexWrap:'wrap' }}>
         <button onClick={() => { onClose(); if (onVerHistorico) onVerHistorico(); }} style={ccBtnSec}>
-          Ver histórico completo
+          Ver histórico
         </button>
         <button
           onClick={() => { if (!isRespondida) setShowResposta(true); }}
-          style={{ ...ccBtnPri,
+          style={{ ...ccBtnPri, flex:1,
             background: isRespondida ? 'oklch(0.28 0.08 155)' : ccBtnPri.background,
             color:      isRespondida ? 'oklch(0.82 0.13 155)' : ccBtnPri.color,
             cursor:     isRespondida ? 'default' : 'pointer',
           }}>
           {isRespondida ? '✓ Respondida' : 'Registrar resposta'}
         </button>
+        <button onClick={() => setShowDelete(true)} style={{
+          background:'transparent', color:CC.crit, border:`1px solid ${CC.crit}`,
+          borderRadius:6, padding:'8px 14px', fontSize:12, cursor:'pointer', fontFamily:CC.fontSans }}>
+          🗑
+        </button>
       </div>
 
       {showResposta && <STRespostaModal item={item} onClose={() => setShowResposta(false)}/>}
+      {showDelete   && <DeleteConfirmModal proto={item.protocolo} onClose={() => setShowDelete(false)}
+                          onDeleted={() => { window._OUV_FETCH && window._OUV_FETCH(); onClose(); }}/>}
     </div>
   );
 }
@@ -822,6 +838,205 @@ function CCTabBtn({ active, onClick, children }) {
       fontSize:12, fontWeight:600, fontFamily:CC.fontSans,
       borderBottom: active ? `2px solid ${CC.accent}` : `2px solid transparent`,
       marginBottom:-1, letterSpacing:0.3 }}>{children}</button>
+  );
+}
+
+// ── DeleteConfirmModal ─────────────────────────────────────────────────────────
+function DeleteConfirmModal({ proto, onClose, onDeleted }) {
+  const [fase, setFase]   = React.useState('confirm'); // confirm | loading | done
+  const [erro, setErro]   = React.useState('');
+
+  async function confirmar() {
+    setFase('loading');
+    try {
+      const res = await fetch(`/api/ouvidorias/${encodeURIComponent(proto)}`, { method: 'DELETE' });
+      if (res.ok) {
+        setFase('done');
+        setTimeout(() => { onDeleted(); onClose(); }, 900);
+      } else {
+        const j = await res.json();
+        setErro(j.detail || 'Erro ao excluir');
+        setFase('confirm');
+      }
+    } catch (e) { setErro(String(e)); setFase('confirm'); }
+  }
+
+  const overlay = { position:'fixed', inset:0, background:'rgba(0,0,0,0.70)',
+    zIndex:9100, display:'flex', alignItems:'center', justifyContent:'center' };
+  const box = { background:CC.surface, border:`1px solid ${CC.crit}`, borderRadius:12,
+    padding:'28px 32px', width:400, maxWidth:'90vw', boxShadow:'0 24px 60px rgba(0,0,0,0.5)',
+    display:'flex', flexDirection:'column', gap:18 };
+
+  return (
+    <div style={overlay} onClick={e => e.target===e.currentTarget && onClose()}>
+      <div style={box}>
+        <div style={{ fontSize:15, fontWeight:600, color:CC.crit }}>🗑 Excluir ouvidoria</div>
+        {fase === 'done' ? (
+          <div style={{ textAlign:'center', fontSize:14, color:CC.ok, padding:'12px 0' }}>✓ Excluída com sucesso</div>
+        ) : (
+          <>
+            <p style={{ fontSize:13, color:CC.textDim, lineHeight:1.6 }}>
+              Tem certeza que deseja excluir <strong style={{color:CC.text,fontFamily:CC.fontMono}}>{proto}</strong>?
+              <br/>Esta ação <strong style={{color:CC.crit}}>não pode ser desfeita</strong>.
+            </p>
+            {erro && <p style={{ fontSize:12, color:CC.crit }}>{erro}</p>}
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+              <button onClick={onClose} style={{ background:'transparent', color:CC.textDim,
+                border:`1px solid ${CC.border}`, borderRadius:6, padding:'8px 18px',
+                fontSize:13, cursor:'pointer', fontFamily:CC.fontSans }}>Cancelar</button>
+              <button onClick={confirmar} disabled={fase==='loading'} style={{
+                background:CC.crit, color:'#fff', border:'none', borderRadius:6,
+                padding:'8px 18px', fontSize:13, fontWeight:600,
+                cursor: fase==='loading'?'wait':'pointer', fontFamily:CC.fontSans }}>
+                {fase==='loading' ? 'Excluindo…' : 'Excluir'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── BuscarEmailsModal ──────────────────────────────────────────────────────────
+function BuscarEmailsModal({ onClose }) {
+  const hoje = new Date().toISOString().slice(0,10);
+  const [dataIni, setDataIni] = React.useState(hoje);
+  const [dataFim, setDataFim] = React.useState(hoje);
+  const [fase,    setFase]    = React.useState('form');  // form | loading | done
+  const [jobId,   setJobId]   = React.useState(null);
+  const [job,     setJob]     = React.useState(null);
+
+  React.useEffect(() => {
+    if (!jobId || fase !== 'loading') return;
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}`);
+        const j   = await res.json();
+        setJob(j);
+        if (j.status !== 'running') {
+          setFase('done');
+          clearInterval(poll);
+          window._OUV_FETCH && window._OUV_FETCH();
+        }
+      } catch {}
+    }, 2000);
+    return () => clearInterval(poll);
+  }, [jobId, fase]);
+
+  async function iniciar() {
+    setFase('loading');
+    try {
+      const res  = await fetch('/api/processar-emails', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data_inicial: dataIni, data_final: dataFim }),
+      });
+      const json = await res.json();
+      setJobId(json.job_id);
+    } catch (e) {
+      setJob({ status:'error', result:{ error: String(e) }, log:[] });
+      setFase('done');
+    }
+  }
+
+  const overlay = { position:'fixed', inset:0, background:'rgba(0,0,0,0.70)',
+    zIndex:9100, display:'flex', alignItems:'center', justifyContent:'center' };
+  const box = { background:CC.surface, border:`1px solid ${CC.border}`, borderRadius:12,
+    padding:'28px 32px', width:560, maxWidth:'94vw', maxHeight:'85vh',
+    display:'flex', flexDirection:'column', gap:18, boxShadow:'0 24px 60px rgba(0,0,0,0.5)' };
+  const inp = { background:CC.surface2, border:`1px solid ${CC.border}`, borderRadius:6,
+    color:CC.text, padding:'7px 10px', fontSize:13, fontFamily:CC.fontSans, outline:'none' };
+  const btnPri = { background:CC.ok, color:'oklch(0.15 0.01 150)', border:'none',
+    borderRadius:6, padding:'9px 20px', fontSize:13, fontWeight:600,
+    cursor:'pointer', fontFamily:CC.fontSans };
+  const btnSec = { background:'transparent', color:CC.textDim, border:`1px solid ${CC.border}`,
+    borderRadius:6, padding:'9px 20px', fontSize:13, cursor:'pointer', fontFamily:CC.fontSans };
+
+  return (
+    <div style={overlay} onClick={e => e.target===e.currentTarget && fase!=='loading' && onClose()}>
+      <div style={box}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span style={{ fontSize:15, fontWeight:600 }}>📥 Buscar E-mails</span>
+          {fase !== 'loading' &&
+            <button onClick={onClose} style={{ background:'transparent', border:'none',
+              color:CC.textDim, cursor:'pointer', fontSize:16 }}>✕</button>}
+        </div>
+
+        {fase === 'form' && (
+          <>
+            <p style={{ fontSize:12, color:CC.textDim, lineHeight:1.5 }}>
+              Conecta ao Gmail e processa os e-mails do período, extraindo ouvidorias e respostas automaticamente por OCR.
+            </p>
+            <div style={{ display:'flex', gap:12, alignItems:'center' }}>
+              <div style={{ display:'flex', flexDirection:'column', gap:4, flex:1 }}>
+                <label style={{ fontSize:11, color:CC.textDim, letterSpacing:0.3 }}>DATA INICIAL</label>
+                <input type="date" value={dataIni} onChange={e=>setDataIni(e.target.value)} style={inp}/>
+              </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:4, flex:1 }}>
+                <label style={{ fontSize:11, color:CC.textDim, letterSpacing:0.3 }}>DATA FINAL</label>
+                <input type="date" value={dataFim} onChange={e=>setDataFim(e.target.value)} style={inp}/>
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+              <button style={btnSec} onClick={onClose}>Cancelar</button>
+              <button style={btnPri} onClick={iniciar}>Buscar</button>
+            </div>
+          </>
+        )}
+
+        {fase === 'loading' && (
+          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+            <div style={{ textAlign:'center', fontSize:13, color:CC.textDim }}>
+              <div style={{ fontSize:26, marginBottom:10 }}>⏳</div>
+              Processando e-mails via OCR… isso pode levar alguns minutos.
+            </div>
+            {job?.log?.length > 0 && (
+              <div style={{ background:'oklch(0.14 0.004 80)', borderRadius:6, padding:'10px 12px',
+                fontSize:11, fontFamily:CC.fontMono, color:CC.textDim, maxHeight:200,
+                overflowY:'auto', lineHeight:1.8, whiteSpace:'pre-wrap' }}>
+                {job.log.slice(-30).join('\n')}
+              </div>
+            )}
+          </div>
+        )}
+
+        {fase === 'done' && job && (
+          <>
+            {job.status === 'error' ? (
+              <p style={{ fontSize:13, color:CC.crit }}>❌ {job.result?.error}</p>
+            ) : (
+              <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8 }}>
+                  {[
+                    ['Ouvidorias',  job.result?.ouvidorias, CC.crit],
+                    ['Respostas',   job.result?.respostas,  CC.ok],
+                    ['PDFs baixados', job.result?.pdfs,     CC.accent],
+                  ].map(([label, val, color]) => (
+                    <div key={label} style={{ background:CC.surface2, borderRadius:8,
+                      padding:'10px 14px', display:'flex', flexDirection:'column', alignItems:'center', gap:4 }}>
+                      <span style={{ fontSize:22, fontWeight:700, color, fontFamily:CC.fontMono }}>{val ?? 0}</span>
+                      <span style={{ fontSize:11, color:CC.textDim }}>{label}</span>
+                    </div>
+                  ))}
+                </div>
+                {job.log?.length > 0 && (
+                  <div style={{ background:'oklch(0.14 0.004 80)', borderRadius:6, padding:'10px 12px',
+                    fontSize:11, fontFamily:CC.fontMono, color:CC.textDim, maxHeight:160,
+                    overflowY:'auto', lineHeight:1.8, whiteSpace:'pre-wrap' }}>
+                    {job.log.slice(-30).join('\n')}
+                  </div>
+                )}
+              </div>
+            )}
+            <div style={{ display:'flex', justifyContent:'flex-end' }}>
+              <button style={{...btnPri, background:CC.accent, color:'oklch(0.15 0.01 230)'}}
+                onClick={onClose}>Fechar</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

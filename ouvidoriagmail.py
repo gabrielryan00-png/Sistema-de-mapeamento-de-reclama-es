@@ -629,7 +629,27 @@ def carregar_message_ids_processados(imap) -> set:
 # =========================
 # PIPELINE PRINCIPAL
 # =========================
-def main(data_inicial: Optional[date] = None, data_final: Optional[date] = None, somente_nao_lidos: bool = True):
+def processar_emails_api(data_inicial, data_final, log_func=print):
+    """Entry point para uso via API — carrega credenciais do config.json."""
+    import json as _json
+    cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
+    try:
+        with open(cfg_path, encoding='utf-8') as _f:
+            _cfg = _json.load(_f)
+    except Exception:
+        _cfg = {}
+
+    global EMAIL, SENHA_APP, REMETENTE_OUVIDORIA
+    EMAIL               = _cfg.get('email',               EMAIL)
+    SENHA_APP           = _cfg.get('senha_app',           SENHA_APP)
+    REMETENTE_OUVIDORIA = _cfg.get('remetente_ouvidoria', REMETENTE_OUVIDORIA)
+
+    main(data_inicial=data_inicial, data_final=data_final,
+         somente_nao_lidos=False, log_func=log_func)
+
+
+def main(data_inicial: Optional[date] = None, data_final: Optional[date] = None,
+         somente_nao_lidos: bool = True, log_func=print):
     # Defaults if not provided
     if data_inicial is None:
         data_inicial = date.today()
@@ -658,7 +678,7 @@ def main(data_inicial: Optional[date] = None, data_final: Optional[date] = None,
         criteria = ["UNSEEN"] + criteria
 
     uids = imap.search(criteria)
-    print(f"\n{len(uids)} e-mail(s) encontrado(s) ({data_inicial} → {data_final}).\n")
+    log_func(f"\n{len(uids)} e-mail(s) encontrado(s) ({data_inicial} → {data_final}).\n")
 
     todos_dados = []
     pdfs_baixados = 0
@@ -669,7 +689,7 @@ def main(data_inicial: Optional[date] = None, data_final: Optional[date] = None,
         message_id = obter_message_id(message)
 
         if message_id and message_id in ids_processados:
-            print(f"[UID {uid}] Já processado, pulando.")
+            log_func(f"[UID {uid}] Já processado, pulando.")
             continue
 
         # Baixa PDFs do e-mail
@@ -686,21 +706,21 @@ def main(data_inicial: Optional[date] = None, data_final: Optional[date] = None,
                 pdfs_baixados += 1
 
         if not pdf_encontrados:
-            print(f"[UID {uid}] Nenhum PDF encontrado, pulando.")
+            log_func(f"[UID {uid}] Nenhum PDF encontrado, pulando.")
             continue
 
         # Processa cada PDF
         for nome_arquivo, caminho in pdf_encontrados:
-            print(f"[UID {uid}] 📄 {nome_arquivo}")
+            log_func(f"[UID {uid}] 📄 {nome_arquivo}")
             dados = processar_pdf(caminho)
             dados["EmailUID"] = uid
 
-            print(f"  Protocolo  : {dados['Protocolo']}")
-            print(f"  Tipo       : {dados['Tipo']}")
-            print(f"  Unidade    : {dados['Unidade']}")
-            print(f"  Reclamante : {dados.get('Reclamante','')}")
-            print(f"  Data       : {dados.get('Data Recebimento','')}")
-            print(f"  Prazo      : {dados['Prazo Resposta']}")
+            log_func(f"  Protocolo  : {dados['Protocolo']}")
+            log_func(f"  Tipo       : {dados['Tipo']}")
+            log_func(f"  Unidade    : {dados['Unidade']}")
+            log_func(f"  Reclamante : {dados.get('Reclamante','')}")
+            log_func(f"  Data       : {dados.get('Data Recebimento','')}")
+            log_func(f"  Prazo      : {dados['Prazo Resposta']}")
 
             # Move arquivo para pasta correta
             if dados["Tipo"] == "RESPOSTA":
@@ -721,26 +741,27 @@ def main(data_inicial: Optional[date] = None, data_final: Optional[date] = None,
             imap.add_gmail_labels([uid], [LABEL_PROCESSADO])
             ids_processados.add(message_id)
         except Exception as e:
-            print(f"  Aviso ao marcar processado: {e}")
+            log_func(f"  Aviso ao marcar processado: {e}")
 
     imap.logout()
 
-    print(f"\nPDFs baixados: {pdfs_baixados}")
+    log_func(f"\nPDFs baixados: {pdfs_baixados}")
 
     if todos_dados:
-        print("\nGerando/atualizando Excel...")
+        log_func("\nGerando/atualizando Excel...")
         criar_ou_atualizar_excel(todos_dados)
 
-        # Resumo
         ouvidorias = [d for d in todos_dados if d["Tipo"] == "OUVIDORIA"]
         respostas  = [d for d in todos_dados if d["Tipo"] == "RESPOSTA"]
-        print(f"\n{'='*50}")
-        print(f"📋 Ouvidorias novas : {len(ouvidorias)}")
-        print(f"📋 Respostas novas  : {len(respostas)}")
-        print(f"📁 Excel            : {RELATORIO}")
-        print(f"{'='*50}")
+        log_func(f"\n{'='*50}")
+        log_func(f"📋 Ouvidorias novas : {len(ouvidorias)}")
+        log_func(f"📋 Respostas novas  : {len(respostas)}")
+        log_func(f"📁 Excel            : {RELATORIO}")
+        log_func(f"{'='*50}")
+        return {"ouvidorias": len(ouvidorias), "respostas": len(respostas), "pdfs": pdfs_baixados}
     else:
-        print("\nNenhuma ouvidoria nova para processar.")
+        log_func("\nNenhuma ouvidoria nova para processar.")
+        return {"ouvidorias": 0, "respostas": 0, "pdfs": 0}
 
 if __name__ == "__main__":
     # Interactive CLI prompts (kept here so importing this module is side-effect free)

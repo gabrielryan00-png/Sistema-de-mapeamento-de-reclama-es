@@ -1,8 +1,10 @@
-"""Servidor Flask local para o Dashboard de Ouvidorias."""
+"""Servidor FastAPI local para o Dashboard de Ouvidorias."""
 import os
 import json
 import time
+import uuid
 import threading
+from datetime import datetime, date
 
 _BASE         = os.path.dirname(os.path.abspath(__file__))
 DASHBOARD_DIR = os.path.join(_BASE, 'dashboard')
@@ -10,13 +12,23 @@ CONFIG_FILE   = os.path.join(_BASE, 'config.json')
 PORT          = 7731
 
 try:
-    from flask import Flask, jsonify, request, send_from_directory
-    FLASK_OK = True
+    from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
+    from fastapi.responses import HTMLResponse, JSONResponse
+    from fastapi.middleware.cors import CORSMiddleware
+    import uvicorn
+    FASTAPI_OK = True
 except ImportError:
-    FLASK_OK = False
+    FASTAPI_OK = False
 
-if FLASK_OK:
-    app = Flask(__name__)
+if FASTAPI_OK:
+    app = FastAPI(title="Ouvidoria Dashboard API", docs_url=None, redoc_url=None)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
     # ── helpers ────────────────────────────────────────────────────────────────
     def _cfg():
@@ -31,17 +43,28 @@ if FLASK_OK:
         pasta = cfg.get('pasta_base', 'ouvidorias')
         return os.path.join(_BASE, pasta, 'ouvidorias.xlsx')
 
-    # ── CORS ───────────────────────────────────────────────────────────────────
-    @app.after_request
-    def _cors(r):
-        r.headers.update({
-            'Access-Control-Allow-Origin':  '*',
-            'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type',
-        })
-        return r
+    # ── jobs (email processing) ────────────────────────────────────────────────
+    _JOBS: dict = {}
+    _PROC_LOCK  = threading.Lock()
 
-    # ── static ─────────────────────────────────────────────────────────────────
+    def _run_processar_emails(job_id: str, data_ini_str: str, data_fim_str: str):
+        log = _JOBS[job_id]['log']
+        def lf(msg): log.append(str(msg))
+        try:
+            import ouvidoriagmail as _gm
+            data_ini = datetime.strptime(data_ini_str, '%Y-%m-%d').date()
+            data_fim = datetime.strptime(data_fim_str, '%Y-%m-%d').date()
+            lf(f"▶ Processando e-mails de {data_ini} até {data_fim}…")
+            with _PROC_LOCK:
+                result = _gm.processar_emails_api(data_ini, data_fim, log_func=lf)
+            _JOBS[job_id]['status'] = 'done'
+            _JOBS[job_id]['result'] = result or {}
+        except Exception as e:
+            _JOBS[job_id]['status'] = 'error'
+            _JOBS[job_id]['result'] = {'error': str(e)}
+            lf(f"❌ {e}")
+
+    # ── JSX bundle ─────────────────────────────────────────────────────────────
     _JSX_FILES = ['data.jsx', 'mapa-unidades.jsx', 'split-triagem.jsx', 'command-center.jsx']
 
     _HTML_TEMPLATE = '''<!DOCTYPE html>
@@ -88,9 +111,9 @@ root.render(<App />);
 </body>
 </html>'''
 
-    @app.route('/')
-    def index():
-        from flask import Response
+    # ── routes: static ─────────────────────────────────────────────────────────
+    @app.get('/', response_class=HTMLResponse)
+    async def index():
         parts = []
         for fname in _JSX_FILES:
             fpath = os.path.join(DASHBOARD_DIR, fname)
@@ -100,19 +123,14 @@ root.render(<App />);
             except Exception as e:
                 parts.append(f'// MISSING: {fname}: {e}')
         bundle = '\n\n'.join(parts)
-        html = _HTML_TEMPLATE.format(jsx_bundle=bundle)
-        return Response(html, mimetype='text/html')
+        return _HTML_TEMPLATE.format(jsx_bundle=bundle)
 
-    @app.route('/<path:fn>')
-    def static_file(fn):
-        return send_from_directory(DASHBOARD_DIR, fn)
-
-    # ── API ────────────────────────────────────────────────────────────────────
-    @app.route('/api/ouvidorias', methods=['GET'])
-    def api_list():
+    # ── routes: ouvidorias ─────────────────────────────────────────────────────
+    @app.get('/api/ouvidorias')
+    async def api_list():
         path = _excel()
         if not os.path.exists(path):
-            return jsonify([])
+            return JSONResponse([])
         try:
             from openpyxl import load_workbook
             wb = load_workbook(path, read_only=True)
@@ -129,47 +147,78 @@ root.render(<App />);
                 if any(v for v in item.values()):
                     rows.append(item)
             wb.close()
-            return jsonify(rows)
+            return JSONResponse(rows)
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            raise HTTPException(500, str(e))
 
-    @app.route('/api/ouvidorias', methods=['POST', 'OPTIONS'])
-    def api_create():
-        if request.method == 'OPTIONS':
-            return '', 204
-        data = request.get_json(force=True) or {}
+    @app.post('/api/ouvidorias', status_code=201)
+    async def api_create(request: Request):
+        data = await request.json() or {}
         if not data.get('Protocolo'):
             data['Protocolo'] = f"MANUAL-{int(time.time())}"
         ok = _append_row(data)
-        return jsonify({'ok': ok, 'protocolo': data['Protocolo']}), 201 if ok else 500
+        return {'ok': ok, 'protocolo': data['Protocolo']}
 
-    @app.route('/api/ouvidorias/<path:proto>', methods=['PATCH', 'OPTIONS'])
-    def api_update(proto):
-        if request.method == 'OPTIONS':
-            return '', 204
-        updates = request.get_json(force=True) or {}
+    @app.patch('/api/ouvidorias/{proto:path}')
+    async def api_update(proto: str, request: Request):
+        updates = await request.json() or {}
         ok = _patch_row(proto, updates)
-        return jsonify({'ok': ok}), 200 if ok else 404
+        if not ok:
+            raise HTTPException(404, 'protocolo não encontrado')
+        return {'ok': True}
 
-    @app.route('/api/cobrar', methods=['POST', 'OPTIONS'])
-    def api_cobrar():
-        if request.method == 'OPTIONS':
-            return '', 204
+    @app.delete('/api/ouvidorias/{proto:path}')
+    async def api_delete(proto: str):
+        ok = _delete_row(proto)
+        if not ok:
+            raise HTTPException(404, 'protocolo não encontrado')
+        return {'ok': True}
+
+    # ── routes: cobranças ──────────────────────────────────────────────────────
+    @app.post('/api/cobrar')
+    async def api_cobrar(request: Request):
         try:
             import cobrar as _cobrar
-            body = request.get_json(force=True) or {}
-            unidades = body.get('unidades') or None  # None = todas
+            body = await request.json() or {}
+            unidades = body.get('unidades') or None
             logs = []
             stats = _cobrar.executar_cobranca(log_func=logs.append, unidades_filtro=unidades)
-            return jsonify({'ok': True, 'stats': stats, 'log': logs})
+            return {'ok': True, 'stats': stats, 'log': logs}
         except Exception as e:
-            return jsonify({'ok': False, 'error': str(e)}), 500
+            raise HTTPException(500, str(e))
 
-    # ── Excel write helpers ────────────────────────────────────────────────────
+    # ── routes: processamento de e-mails (background job) ─────────────────────
+    @app.post('/api/processar-emails', status_code=202)
+    async def api_processar_emails(request: Request, background_tasks: BackgroundTasks):
+        body = await request.json() or {}
+        hoje = date.today().strftime('%Y-%m-%d')
+        data_ini = body.get('data_inicial') or hoje
+        data_fim = body.get('data_final')   or hoje
+        job_id = uuid.uuid4().hex[:8]
+        _JOBS[job_id] = {'status': 'running', 'log': [], 'result': None}
+        background_tasks.add_task(_run_processar_emails, job_id, data_ini, data_fim)
+        return {'job_id': job_id}
+
+    @app.get('/api/jobs/{job_id}')
+    async def api_job_status(job_id: str):
+        job = _JOBS.get(job_id)
+        if not job:
+            raise HTTPException(404, 'job não encontrado')
+        return job
+
+    # ── catch-all static (deve ficar APÓS todas as rotas /api/*) ──────────────
+    @app.get('/{fn:path}')
+    async def static_file(fn: str):
+        from fastapi.responses import FileResponse
+        path = os.path.join(DASHBOARD_DIR, fn)
+        if os.path.isfile(path):
+            return FileResponse(path)
+        raise HTTPException(404)
+
+    # ── Excel helpers ──────────────────────────────────────────────────────────
     _EXTRA_COLS = ['Reclamante', 'Canal']
 
     def _ensure_cols(ws):
-        """Garante que Reclamante e Canal existem no cabeçalho."""
         from openpyxl.styles import Font, PatternFill
         cur = [ws.cell(1, i).value for i in range(1, ws.max_column + 2)]
         for col in _EXTRA_COLS:
@@ -183,15 +232,12 @@ root.render(<App />);
         try:
             from openpyxl import load_workbook, Workbook
             from openpyxl.styles import Font, PatternFill, Alignment
-
             path = _excel()
             os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
-
             if os.path.exists(path):
                 wb = load_workbook(path)
             else:
                 wb = Workbook(); wb.remove(wb.active)
-
             if 'Ouvidorias' not in wb.sheetnames:
                 from constantes import COLUNAS_OUV
                 ws = wb.create_sheet('Ouvidorias')
@@ -204,15 +250,12 @@ root.render(<App />);
             else:
                 ws = wb['Ouvidorias']
                 _ensure_cols(ws)
-
             headers = [ws.cell(1, i).value for i in range(1, ws.max_column + 1)]
             row_n   = ws.max_row + 1
             for col, val in data.items():
                 if col in headers:
                     ws.cell(row_n, headers.index(col) + 1, str(val) if val else '')
-
-            wb.save(path)
-            wb.close()
+            wb.save(path); wb.close()
             return True
         except Exception as e:
             print(f'[Dashboard] Erro ao criar linha: {e}')
@@ -229,24 +272,45 @@ root.render(<App />);
                 wb.close(); return False
             ws = wb['Ouvidorias']
             _ensure_cols(ws)
-            headers  = [ws.cell(1, i).value for i in range(1, ws.max_column + 1)]
-            pcol     = next((i + 1 for i, h in enumerate(headers) if h == 'Protocolo'), None)
+            headers = [ws.cell(1, i).value for i in range(1, ws.max_column + 1)]
+            pcol    = next((i + 1 for i, h in enumerate(headers) if h == 'Protocolo'), None)
             if not pcol:
                 wb.close(); return False
             for row in range(2, ws.max_row + 1):
                 if str(ws.cell(row, pcol).value or '').strip() == proto.strip():
-                    # refresh headers after _ensure_cols may have added cols
                     headers = [ws.cell(1, i).value for i in range(1, ws.max_column + 1)]
                     for col, val in updates.items():
                         if col in headers:
                             ws.cell(row, headers.index(col) + 1, str(val) if val else '')
-                    wb.save(path)
-                    wb.close()
+                    wb.save(path); wb.close()
                     return True
-            wb.close()
-            return False
+            wb.close(); return False
         except Exception as e:
             print(f'[Dashboard] Erro ao atualizar linha: {e}')
+            return False
+
+    def _delete_row(proto: str) -> bool:
+        try:
+            from openpyxl import load_workbook
+            path = _excel()
+            if not os.path.exists(path):
+                return False
+            wb = load_workbook(path)
+            if 'Ouvidorias' not in wb.sheetnames:
+                wb.close(); return False
+            ws = wb['Ouvidorias']
+            headers = [ws.cell(1, i).value for i in range(1, ws.max_column + 1)]
+            pcol    = next((i + 1 for i, h in enumerate(headers) if h == 'Protocolo'), None)
+            if not pcol:
+                wb.close(); return False
+            for row in range(2, ws.max_row + 1):
+                if str(ws.cell(row, pcol).value or '').strip() == proto.strip():
+                    ws.delete_rows(row)
+                    wb.save(path); wb.close()
+                    return True
+            wb.close(); return False
+        except Exception as e:
+            print(f'[Dashboard] Erro ao deletar linha: {e}')
             return False
 
 # ── public start ───────────────────────────────────────────────────────────────
@@ -254,17 +318,15 @@ _started = False
 
 def start_server(port: int = PORT) -> int:
     global _started
-    if not FLASK_OK:
-        print('[Dashboard] Flask não instalado — execute: pip install flask')
+    if not FASTAPI_OK:
+        print('[Dashboard] FastAPI/uvicorn não instalado — execute: pip install fastapi uvicorn')
         return 0
     if _started:
         return port
     _started = True
 
     def _run():
-        import logging
-        logging.getLogger('werkzeug').setLevel(logging.ERROR)
-        app.run(host='127.0.0.1', port=port, debug=False, use_reloader=False)
+        uvicorn.run(app, host='127.0.0.1', port=port, log_level='error')
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()

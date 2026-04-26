@@ -256,6 +256,7 @@ function STAssuntoStrip() {
 function STDetailView({ item, onEdit }) {
   const [showResposta,   setShowResposta]   = React.useState(false);
   const [showEncaminhar, setShowEncaminhar] = React.useState(false);
+  const [showDelete,     setShowDelete]     = React.useState(false);
   const assunto        = ASSUNTOS.find(a => a.key === item.assuntoKey) || ASSUNTOS[0];
   const tier           = urgencyTier(item.diasRestantes, item.status);
   const isRespondida   = ['respondida', 'fechada'].includes(item.status);
@@ -313,6 +314,10 @@ function STDetailView({ item, onEdit }) {
             }}>
             {isRespondida ? '✓ Respondida' : 'Registrar resposta'}
           </button>
+          <button onClick={() => setShowDelete(true)} style={{
+            background:'transparent', color:ST.crit, border:`1px solid ${ST.crit}`,
+            borderRadius:6, padding:'7px 12px', fontSize:12, cursor:'pointer',
+            fontFamily:ST.fontSans }}>🗑</button>
         </div>
       </div>
 
@@ -381,6 +386,8 @@ function STDetailView({ item, onEdit }) {
 
     {showResposta    && <STRespostaModal   item={item} onClose={() => setShowResposta(false)}/>}
     {showEncaminhar  && <STEncaminharModal item={item} onClose={() => setShowEncaminhar(false)}/>}
+    {showDelete      && <STDeleteModal     proto={item.protocolo} onClose={() => setShowDelete(false)}
+                          onDeleted={() => { window._OUV_FETCH && window._OUV_FETCH(); setShowDelete(false); }}/>}
     </>
   );
 }
@@ -1161,6 +1168,56 @@ function SplitTriagem({ embedded = false }) {
 
       {/* Modal de formulário */}
       {showForm && <STFormModal item={editItem} onClose={closeForm}/>}
+    </div>
+  );
+}
+
+function STDeleteModal({ proto, onClose, onDeleted }) {
+  const [fase, setFase] = React.useState('confirm');
+  const [erro, setErro] = React.useState('');
+
+  async function confirmar() {
+    setFase('loading');
+    try {
+      const res = await fetch(`/api/ouvidorias/${encodeURIComponent(proto)}`, { method: 'DELETE' });
+      if (res.ok) { setFase('done'); setTimeout(() => { onDeleted(); }, 800); }
+      else { const j = await res.json(); setErro(j.detail||'Erro ao excluir'); setFase('confirm'); }
+    } catch (e) { setErro(String(e)); setFase('confirm'); }
+  }
+
+  const overlay = { position:'fixed', inset:0, background:'rgba(0,0,0,0.70)',
+    zIndex:9100, display:'flex', alignItems:'center', justifyContent:'center' };
+  const box = { background:ST.surface, border:`1px solid ${ST.crit}`, borderRadius:12,
+    padding:'28px 32px', width:380, maxWidth:'90vw', display:'flex', flexDirection:'column', gap:18,
+    boxShadow:'0 24px 60px rgba(0,0,0,0.5)' };
+
+  return (
+    <div style={overlay} onClick={e => e.target===e.currentTarget && onClose()}>
+      <div style={box}>
+        <div style={{ fontSize:15, fontWeight:600, color:ST.crit }}>🗑 Excluir ouvidoria</div>
+        {fase === 'done' ? (
+          <div style={{ textAlign:'center', color:ST.ok, fontSize:14, padding:'8px 0' }}>✓ Excluída</div>
+        ) : (
+          <>
+            <p style={{ fontSize:13, color:ST.textDim, lineHeight:1.6 }}>
+              Excluir <strong style={{color:ST.text,fontFamily:ST.fontMono}}>{proto}</strong>?
+              {' '}<strong style={{color:ST.crit}}>Esta ação não pode ser desfeita.</strong>
+            </p>
+            {erro && <p style={{ fontSize:12, color:ST.crit }}>{erro}</p>}
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+              <button onClick={onClose} style={{ background:'transparent', color:ST.textDim,
+                border:`1px solid ${ST.border}`, borderRadius:6, padding:'8px 16px',
+                fontSize:13, cursor:'pointer' }}>Cancelar</button>
+              <button onClick={confirmar} disabled={fase==='loading'} style={{
+                background:ST.crit, color:'#fff', border:'none', borderRadius:6,
+                padding:'8px 16px', fontSize:13, fontWeight:600,
+                cursor:fase==='loading'?'wait':'pointer' }}>
+                {fase==='loading' ? 'Excluindo…' : 'Excluir'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
