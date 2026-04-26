@@ -157,8 +157,10 @@ root.render(<App />);
             return '', 204
         try:
             import cobrar as _cobrar
+            body = request.get_json(force=True) or {}
+            unidades = body.get('unidades') or None  # None = todas
             logs = []
-            stats = _cobrar.executar_cobranca(log_func=logs.append)
+            stats = _cobrar.executar_cobranca(log_func=logs.append, unidades_filtro=unidades)
             return jsonify({'ok': True, 'stats': stats, 'log': logs})
         except Exception as e:
             return jsonify({'ok': False, 'error': str(e)}), 500

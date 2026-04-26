@@ -72,8 +72,12 @@ def enviar_email(destino, assunto, corpo, log_func=None):
         return False
 
 
-def executar_cobranca(log_func=None):
-    """Executa cobranças de ouvidorias pendentes baseado na planilha."""
+def executar_cobranca(log_func=None, unidades_filtro=None):
+    """Executa cobranças de ouvidorias pendentes baseado na planilha.
+
+    unidades_filtro: lista de nomes oficiais de unidade para restringir o envio.
+                     None = todas as unidades elegíveis.
+    """
     if log_func is None:
         log_func = logger.info
 
@@ -95,18 +99,16 @@ def executar_cobranca(log_func=None):
 
     try:
         wb = load_workbook(PLANILHA)
-        ws = wb["Ouvidorias"]  # Usa abadefinida
+        ws = wb["Ouvidorias"]
     except Exception as e:
         msg = f"❌ Erro ao abrir Excel: {e}"
         log_func(msg)
         logger.error(msg)
         return stats
 
-    # Mapear colunas por nome (mais robusto)
     headers = {cell.value: idx for idx, cell in enumerate(ws[1], 1)}
-    
-    # Validar colunas essenciais
-    required_cols = ["Protocolo", "Tipo", "Unidade", "Status", "Prazo Resposta", "Observações", "Data Última Cobrança"]
+
+    required_cols = ["Protocolo", "Unidade", "Status", "Prazo Resposta", "Observações", "Data Última Cobrança"]
     missing = [col for col in required_cols if col not in headers]
     if missing:
         msg = f"❌ Colunas ausentes no Excel: {missing}"
@@ -118,34 +120,26 @@ def executar_cobranca(log_func=None):
 
     for row_num, row in enumerate(ws.iter_rows(min_row=2, values_only=False), start=2):
         try:
-            # Extrair dados usando mapeamento de coluna
-            col_proto = headers["Protocolo"]
-            col_tipo = headers["Tipo"]
-            col_unidade = headers["Unidade"]
-            col_status = headers["Status"]
-            col_prazo = headers["Prazo Resposta"]
-            col_observacoes = headers["Observações"]
+            col_proto          = headers["Protocolo"]
+            col_unidade        = headers["Unidade"]
+            col_status         = headers["Status"]
+            col_prazo          = headers["Prazo Resposta"]
+            col_observacoes    = headers["Observações"]
             col_ultima_cobranca = headers["Data Última Cobrança"]
 
-            protocolo = row[col_proto - 1].value
-            tipo = row[col_tipo - 1].value
-            unidade = row[col_unidade - 1].value
-            status = row[col_status - 1].value
-            prazo = row[col_prazo - 1].value
-            observacoes = row[col_observacoes - 1].value or ""
+            protocolo            = row[col_proto - 1].value
+            unidade              = row[col_unidade - 1].value
+            status               = row[col_status - 1].value
+            prazo                = row[col_prazo - 1].value
+            observacoes          = row[col_observacoes - 1].value or ""
             data_ultima_cobranca = row[col_ultima_cobranca - 1].value
 
-            # Filtro 1: Tipo deve ser OUVIDORIA
-            if normalizar(str(tipo)) != "ouvidoria":
-                stats["nao_pendentes_puladas"] += 1
-                continue
-
-            # Filtro 2: Protocolo válido
+            # Filtro 1: Protocolo válido
             if protocolo is None or "NÃO" in str(protocolo).upper():
                 stats["nao_pendentes_puladas"] += 1
                 continue
 
-            # Filtro 3: Ignorar Indeterminadas
+            # Filtro 2: Ignorar Indeterminadas
             if "Indeterminada" in str(observacoes):
                 msg = f"⏭️  Protocolo {protocolo}: Pulando indeterminada"
                 log_func(msg)
@@ -153,18 +147,24 @@ def executar_cobranca(log_func=None):
                 stats["indeterminadas_puladas"] += 1
                 continue
 
-            # Filtro 4: Status deve ser PENDENTE
-            if normalizar(str(status)) != "pendente":
+            # Filtro 3: Status deve ser PENDENTE ou ENCAMINHADA
+            status_norm = normalizar(str(status))
+            if status_norm not in ("pendente", "encaminhada"):
                 stats["nao_pendentes_puladas"] += 1
                 continue
 
-            # Filtro 5: Validar unidade
+            # Filtro 4: Validar unidade
             unidade_oficial = identificar_unidade(str(unidade))
             if not unidade_oficial:
                 msg = f"❌ Unidade não reconhecida: {unidade} (Protocolo {protocolo})"
                 log_func(msg)
                 logger.warning(msg)
                 stats["unidade_nao_reconhecida"] += 1
+                continue
+
+            # Filtro 5: Restringir às unidades selecionadas (se informado)
+            if unidades_filtro and unidade_oficial not in unidades_filtro:
+                stats["nao_pendentes_puladas"] += 1
                 continue
 
             # Filtro 6: Verificar data do prazo

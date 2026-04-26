@@ -321,17 +321,52 @@ function CommandCenter({ standalone = false }) {
 }
 
 function LembretesModal({ onClose }) {
-  const [fase, setFase] = React.useState('confirm'); // confirm | loading | result
+  // Derivar unidades com ouvidorias abertas (PENDENTE ou ENCAMINHADA) do DATASET global
+  const unidadesDisponiveis = React.useMemo(() => {
+    const map = {};
+    DATASET.forEach(x => {
+      const s = (x.status || '').toUpperCase();
+      if (s !== 'RESPONDIDA' && s !== 'FECHADA') {
+        if (!map[x.unidade]) map[x.unidade] = { nome: x.unidade, count: 0, vencidas: 0 };
+        map[x.unidade].count++;
+        if (x.diasRestantes < 0) map[x.unidade].vencidas++;
+      }
+    });
+    return Object.values(map).sort((a, b) => b.vencidas - a.vencidas || b.count - a.count);
+  }, []);
+
+  const [selecionadas, setSelecionadas] = React.useState(() => new Set(unidadesDisponiveis.map(u => u.nome)));
+  const [fase, setFase]         = React.useState('select'); // select | loading | result
   const [resultado, setResultado] = React.useState(null);
   const [logLines, setLogLines]   = React.useState([]);
 
+  const todasMarcadas = selecionadas.size === unidadesDisponiveis.length;
+
+  function toggleUnidade(nome) {
+    setSelecionadas(prev => {
+      const next = new Set(prev);
+      next.has(nome) ? next.delete(nome) : next.add(nome);
+      return next;
+    });
+  }
+
+  function toggleTodas() {
+    setSelecionadas(todasMarcadas ? new Set() : new Set(unidadesDisponiveis.map(u => u.nome)));
+  }
+
   async function enviar() {
+    if (selecionadas.size === 0) return;
     setFase('loading');
     try {
-      const res = await fetch('/api/cobrar', { method: 'POST' });
+      const body = { unidades: Array.from(selecionadas) };
+      const res  = await fetch('/api/cobrar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
       const json = await res.json();
       setResultado(json);
-      setLogLines((json.log || []).slice(-20));
+      setLogLines((json.log || []).slice(-30));
       setFase('result');
     } catch (e) {
       setResultado({ ok: false, error: String(e) });
@@ -340,19 +375,21 @@ function LembretesModal({ onClose }) {
   }
 
   const overlay = {
-    position:'fixed', inset:0, background:'rgba(0,0,0,0.65)', zIndex:9000,
+    position:'fixed', inset:0, background:'rgba(0,0,0,0.70)', zIndex:9000,
     display:'flex', alignItems:'center', justifyContent:'center',
   };
   const box = {
     background:CC.surface, border:`1px solid ${CC.border}`, borderRadius:12,
-    padding:'28px 32px', width:520, maxWidth:'92vw', maxHeight:'80vh',
-    display:'flex', flexDirection:'column', gap:20,
-    boxShadow:'0 24px 60px rgba(0,0,0,0.5)',
+    padding:'28px 32px', width:580, maxWidth:'94vw', maxHeight:'88vh',
+    display:'flex', flexDirection:'column', gap:18,
+    boxShadow:'0 24px 60px rgba(0,0,0,0.55)',
   };
   const btnPrimary = {
-    background:CC.accent, color:'oklch(0.15 0.01 230)', border:'none',
-    borderRadius:6, padding:'9px 20px', fontSize:13, fontWeight:600,
-    cursor:'pointer', fontFamily:CC.fontSans,
+    background: selecionadas.size === 0 ? CC.surface2 : CC.accent,
+    color: selecionadas.size === 0 ? CC.textMute : 'oklch(0.15 0.01 230)',
+    border:'none', borderRadius:6, padding:'9px 20px', fontSize:13,
+    fontWeight:600, cursor: selecionadas.size === 0 ? 'not-allowed' : 'pointer',
+    fontFamily:CC.fontSans,
   };
   const btnSec = {
     background:'transparent', color:CC.textDim, border:`1px solid ${CC.border}`,
@@ -363,29 +400,77 @@ function LembretesModal({ onClose }) {
   return (
     <div style={overlay} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={box}>
+        {/* Header */}
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <span style={{ fontSize:15, fontWeight:600, letterSpacing:0.2 }}>📧 Enviar Lembretes</span>
           <button onClick={onClose} style={{ background:'transparent', border:'none',
             color:CC.textDim, cursor:'pointer', fontSize:16 }}>✕</button>
         </div>
 
-        {fase === 'confirm' && (
+        {/* Seleção de unidades */}
+        {fase === 'select' && (
           <>
-            <p style={{ fontSize:13, color:CC.textDim, lineHeight:1.6 }}>
-              Envia e-mails de cobrança para as unidades com ouvidorias <strong style={{color:CC.crit}}>vencidas</strong> ou
-              {' '}<strong style={{color:CC.warn}}>pendentes há mais de 3 dias</strong>, respeitando o intervalo mínimo
-              de 7 dias entre cobranças por unidade.
-            </p>
+            <div style={{ fontSize:12, color:CC.textDim, lineHeight:1.5 }}>
+              Selecione as unidades que receberão o e-mail de cobrança.
+              Apenas ouvidorias <strong style={{color:CC.warn}}>abertas/encaminhadas</strong> serão consideradas.
+            </div>
+
+            {unidadesDisponiveis.length === 0 ? (
+              <div style={{ textAlign:'center', padding:'20px 0', color:CC.textMute, fontSize:13 }}>
+                Nenhuma ouvidoria aberta no momento.
+              </div>
+            ) : (
+              <>
+                {/* Selecionar todas */}
+                <div style={{ display:'flex', alignItems:'center', gap:10, paddingBottom:8,
+                  borderBottom:`1px solid ${CC.border}` }}>
+                  <input type="checkbox" id="cb-todas" checked={todasMarcadas}
+                    onChange={toggleTodas}
+                    style={{ accentColor:CC.accent, width:15, height:15, cursor:'pointer' }}/>
+                  <label htmlFor="cb-todas" style={{ fontSize:12, fontWeight:600,
+                    color:CC.text, cursor:'pointer', userSelect:'none' }}>
+                    Selecionar todas ({unidadesDisponiveis.length})
+                  </label>
+                  <span style={{ marginLeft:'auto', fontSize:11, color:CC.textMute }}>
+                    {selecionadas.size} selecionada{selecionadas.size !== 1 ? 's' : ''}
+                  </span>
+                </div>
+
+                {/* Lista de unidades */}
+                <div style={{ overflowY:'auto', maxHeight:280, display:'flex',
+                  flexDirection:'column', gap:4 }}>
+                  {unidadesDisponiveis.map(u => (
+                    <label key={u.nome} style={{ display:'flex', alignItems:'center', gap:10,
+                      padding:'8px 10px', borderRadius:7, cursor:'pointer',
+                      background: selecionadas.has(u.nome) ? CC.surface2 : 'transparent',
+                      border:`1px solid ${selecionadas.has(u.nome) ? CC.borderSoft : 'transparent'}`,
+                      transition:'background 0.1s' }}>
+                      <input type="checkbox" checked={selecionadas.has(u.nome)}
+                        onChange={() => toggleUnidade(u.nome)}
+                        style={{ accentColor:CC.accent, width:14, height:14, cursor:'pointer', flexShrink:0 }}/>
+                      <span style={{ flex:1, fontSize:12.5, color:CC.text }}>{u.nome}</span>
+                      <span style={{ fontSize:11, fontFamily:CC.fontMono, color: u.vencidas > 0 ? CC.crit : CC.textDim }}>
+                        {u.count} ouv.{u.vencidas > 0 ? ` · ${u.vencidas} vencida${u.vencidas>1?'s':''}` : ''}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+
             <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
               <button style={btnSec} onClick={onClose}>Cancelar</button>
-              <button style={btnPrimary} onClick={enviar}>Confirmar envio</button>
+              <button style={btnPrimary} onClick={enviar}
+                disabled={selecionadas.size === 0}>
+                Enviar para {selecionadas.size} unidade{selecionadas.size !== 1 ? 's' : ''}
+              </button>
             </div>
           </>
         )}
 
         {fase === 'loading' && (
-          <div style={{ textAlign:'center', padding:'20px 0', color:CC.textDim, fontSize:13 }}>
-            <div style={{ fontSize:22, marginBottom:12 }}>⏳</div>
+          <div style={{ textAlign:'center', padding:'28px 0', color:CC.textDim, fontSize:13 }}>
+            <div style={{ fontSize:28, marginBottom:14 }}>⏳</div>
             Enviando e-mails de cobrança…
           </div>
         )}
@@ -396,22 +481,22 @@ function LembretesModal({ onClose }) {
               <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
                   {[
-                    ['Enviados',      resultado.stats?.total_enviadas,         CC.ok],
-                    ['Sem e-mail',    resultado.stats?.sem_email,              CC.warn],
-                    ['Erros envio',   resultado.stats?.erros_envio,            CC.crit],
-                    ['Já cobrados',   resultado.stats?.recobranca_pulada,      CC.textDim],
+                    ['Enviados',     resultado.stats?.total_enviadas,    CC.ok],
+                    ['Sem e-mail',   resultado.stats?.sem_email,         CC.warn],
+                    ['Erros envio',  resultado.stats?.erros_envio,       CC.crit],
+                    ['Já cobrados',  resultado.stats?.recobranca_pulada, CC.textDim],
                   ].map(([label, val, color]) => (
                     <div key={label} style={{ background:CC.surface2, borderRadius:8,
                       padding:'10px 14px', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                       <span style={{ fontSize:12, color:CC.textDim }}>{label}</span>
-                      <span style={{ fontSize:18, fontWeight:700, color, fontFamily:CC.fontMono }}>{val ?? 0}</span>
+                      <span style={{ fontSize:20, fontWeight:700, color, fontFamily:CC.fontMono }}>{val ?? 0}</span>
                     </div>
                   ))}
                 </div>
                 {logLines.length > 0 && (
                   <div style={{ background:'oklch(0.14 0.004 80)', borderRadius:6, padding:'10px 12px',
-                    fontSize:11, fontFamily:CC.fontMono, color:CC.textDim, maxHeight:160,
-                    overflowY:'auto', lineHeight:1.7, whiteSpace:'pre-wrap' }}>
+                    fontSize:11, fontFamily:CC.fontMono, color:CC.textDim, maxHeight:180,
+                    overflowY:'auto', lineHeight:1.8, whiteSpace:'pre-wrap' }}>
                     {logLines.join('\n')}
                   </div>
                 )}
@@ -420,7 +505,8 @@ function LembretesModal({ onClose }) {
               <p style={{ fontSize:13, color:CC.crit }}>❌ {resultado.error}</p>
             )}
             <div style={{ display:'flex', justifyContent:'flex-end' }}>
-              <button style={btnPrimary} onClick={onClose}>Fechar</button>
+              <button style={{...btnPrimary, background:CC.accent, color:'oklch(0.15 0.01 230)', cursor:'pointer'}}
+                onClick={onClose}>Fechar</button>
             </div>
           </>
         )}
