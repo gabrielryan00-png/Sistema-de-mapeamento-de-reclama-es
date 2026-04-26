@@ -89,19 +89,30 @@ def ler_pdf(pdf_path: str) -> str:
 # =========================
 def extrair_protocolo(texto: str) -> str:
     """
-    Extrai número de protocolo no formato P.O. 000000/AAAA ou similares.
+    Extrai o número de protocolo. Suporta os formatos encontrados nos documentos:
+      - "P.O. 003279/2026"  → "P.O. 003279/2026"  (ouvidoria da Controladoria)
+      - "Ref. PO 2278"      → "P.O. 2278"          (resposta da unidade)
+      - "P.O. 003279/2026 - OUVIDORIA" (linha de cabeçalho)
     """
-    m = re.search(r"P\.?\s*O\.?\s*[:\-]?\s*(\d{6}[\s/]\d{4})", texto, re.IGNORECASE)
+    # Prioridade 1: P.O. XXXXXX/AAAA — formato canônico da Controladoria
+    m = re.search(r"P\.?\s*O\.?\s*[:\-]?\s*(\d{4,6})\s*[/\-]\s*(\d{4})", texto, re.IGNORECASE)
     if m:
-        return m.group(1).replace(" ", "/").strip()
+        return f"P.O. {m.group(1)}/{m.group(2)}"
 
+    # Prioridade 2: "Ref. PO XXXX" ou "Ref: P.O. XXXX" — cabeçalho de resposta
+    m = re.search(r"Ref\.?\s*[:\-]?\s*P\.?\s*O\.?\s*[\.\-\s]*(\d{3,6})", texto, re.IGNORECASE)
+    if m:
+        return f"P.O. {m.group(1)}"
+
+    # Prioridade 3: "PO XXXX" isolado (sem Ref., sem ano)
+    m = re.search(r"\bP\.?\s*O\.?\s+(\d{3,6})\b", texto, re.IGNORECASE)
+    if m:
+        return f"P.O. {m.group(1)}"
+
+    # Prioridade 4: campo genérico "Protocolo: XXXX"
     m = re.search(r"(?:Protocolo|Proc\.?|N[uú]mero)[:\s#]*(\d{4,}[\s/.-]\d{2,4})", texto, re.IGNORECASE)
     if m:
         return m.group(1).strip()
-
-    m = re.search(r"\b(\d{6}/\d{4})\b", texto)
-    if m:
-        return m.group(1)
 
     return ""
 
@@ -261,35 +272,78 @@ def extrair_unidade(texto: str) -> str:
 
     return "NÃO IDENTIFICADA"
 
+_MESES_PT = {
+    'janeiro': 1, 'fevereiro': 2, 'marco': 3, 'março': 3,
+    'abril': 4, 'maio': 5, 'junho': 6, 'julho': 7,
+    'agosto': 8, 'setembro': 9, 'outubro': 10,
+    'novembro': 11, 'dezembro': 12,
+}
+
 def extrair_data_documento(texto: str) -> Optional[date]:
     """
-    Extrai a data do documento (ex: "Suzano, 17-03-2026" ou "17/03/2026").
+    Extrai a data do documento. Suporta:
+      - "23-04-2026" / "23/04/2026"        (Controladoria)
+      - "08 de abril de 2026"              (resposta de unidade)
+      - "Suzano, 23-04-2026"
     """
-    formatos = [
-        (r"(\d{2}[-/]\d{2}[-/]\d{4})", ["%d-%m-%Y", "%d/%m/%Y"]),
-        (r"(\d{4}[-/]\d{2}[-/]\d{2})", ["%Y-%m-%d", "%Y/%m/%d"]),
-    ]
-    for padrao, fmts in formatos:
-        for m in re.finditer(padrao, texto):
-            for fmt in fmts:
-                try:
-                    return datetime.strptime(m.group(1), fmt).date()
-                except ValueError:
-                    continue
+    # Prioridade 1: dd-mm-aaaa ou dd/mm/aaaa
+    for m in re.finditer(r"(\d{2})[-/](\d{2})[-/](\d{4})", texto):
+        try:
+            return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            continue
+
+    # Prioridade 2: "8 de abril de 2026" — formato por extenso
+    m = re.search(r"(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})", texto, re.IGNORECASE)
+    if m:
+        mes = _MESES_PT.get(m.group(2).lower().strip())
+        if mes:
+            try:
+                return date(int(m.group(3)), mes, int(m.group(1)))
+            except ValueError:
+                pass
+
+    # Prioridade 3: aaaa-mm-dd
+    for m in re.finditer(r"(\d{4})[-/](\d{2})[-/](\d{2})", texto):
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            continue
+
     return None
 
 def extrair_tipo(texto: str) -> str:
     """
     Classifica o PDF como 'OUVIDORIA' ou 'RESPOSTA'.
-    Documentos de resposta tipicamente vêm de um serviço/secretaria respondendo.
+
+    Estratégia em duas camadas:
+      1. Regras determinísticas de alta certeza (estrutura do documento)
+      2. Pontuação por sinais configuráveis em constantes.py (fallback)
     """
-    # Usa estratégia de pontuação: conta sinais de 'RESPOSTA' e de 'OUVIDORIA'
-    t = texto.upper()
-
-    # Use configurable signals from constantes.py
     from constantes import SINAIS_RESPOSTA, SINAIS_OUVIDORIA, CLASSIFIER_WEIGHTS
-    import re
 
+    inicio = texto[:600]  # cabeçalho onde a identidade do documento fica mais clara
+
+    # ── Regras determinísticas ─────────────────────────────────────────────────
+    # Respostas de unidade sempre começam com "Resposta à Manifestação de Ouvidoria"
+    if re.search(r"Resposta\s+à\s+Manifesta[çc][aã]o\s+de\s+Ouvidoria", inicio, re.IGNORECASE):
+        return "RESPOSTA"
+
+    # Cabeçalho típico da Controladoria: "EMENTA DA DEMANDA" ou "E M E N T A"
+    if re.search(r"E\s*M\s*E\s*N\s*T\s*A\s+D\s*A\s+D\s*E\s*M\s*A\s*N\s*D\s*A", texto, re.IGNORECASE):
+        return "OUVIDORIA"
+
+    # Linha de encaminhamento da Controladoria
+    if re.search(r"CONTROLADORIA\s+GERAL\s+DO\s+MUNIC", inicio, re.IGNORECASE) and \
+       re.search(r"ENCAMINHAMENTO", texto, re.IGNORECASE):
+        return "OUVIDORIA"
+
+    # "Atenciosamente" + assinatura de gerente/enfermeira → resposta de unidade
+    if re.search(r"Atenciosamente", texto, re.IGNORECASE) and \
+       re.search(r"Enfermeira|Gerente|Coordenadora|Diretor", texto, re.IGNORECASE):
+        return "RESPOSTA"
+
+    # ── Pontuação por sinais (fallback) ────────────────────────────────────────
     def count_matches(patterns, text):
         s = 0
         for p in patterns:
@@ -299,16 +353,15 @@ def extrair_tipo(texto: str) -> str:
                 s += text.upper().count(p.upper())
         return s
 
-    score_resposta = count_matches(SINAIS_RESPOSTA, texto)
+    score_resposta  = count_matches(SINAIS_RESPOSTA, texto)
     score_ouvidoria = count_matches(SINAIS_OUVIDORIA, texto)
 
-    # boost: se há frase inicial típica de resposta no começo do documento
-    inicio = texto[:400]
-    if any(x.upper() in inicio.upper() for x in ["EM ATENÇÃO", "EM RESPOSTA", "EM ATENCAO", "EM ATENÇÃO À"]):
+    # Boost se início tem sinais fortes de resposta
+    if any(x.upper() in inicio.upper() for x in
+           ["EM ATENÇÃO", "EM RESPOSTA", "EM ATENCAO", "RETORNO À MANIFESTAÇÃO"]):
         score_resposta += CLASSIFIER_WEIGHTS.get("inicio_boost", 2)
 
-    # aplicar pesos gerais (se necessários)
-    score_resposta *= CLASSIFIER_WEIGHTS.get("resposta_weight", 1)
+    score_resposta  *= CLASSIFIER_WEIGHTS.get("resposta_weight", 1)
     score_ouvidoria *= CLASSIFIER_WEIGHTS.get("ouvidoria_weight", 1)
 
     if score_resposta > score_ouvidoria:
@@ -316,58 +369,124 @@ def extrair_tipo(texto: str) -> str:
     if score_ouvidoria > score_resposta:
         return "OUVIDORIA"
 
-    # Empate: heurísticas simples
-    if re.search(r"EM ATENÇÃO|RESPOSTA|RETORNO À MANIFESTAÇÃO|ATENCIOSAMENTE", texto, re.IGNORECASE):
-        return "RESPOSTA"
-    if re.search(r"MANIFESTAÇÃO|PROTOCOLO|RECLAMAÇÃO|DENÚNCIA", texto, re.IGNORECASE):
+    # Empate: "P.O. XXXXX" é exclusivo de ouvidoria
+    if re.search(r"\bP\.?\s*O\.\s+\d{3,6}", texto, re.IGNORECASE):
         return "OUVIDORIA"
 
     return "OUVIDORIA"
 
 def extrair_assunto(texto: str) -> str:
     """
-    Tenta capturar o assunto/ementa da demanda (linha com texto em destaque após FALTA, DEMORA etc.).
+    Extrai o assunto/ementa da demanda.
+
+    Estrutura do documento Controladoria:
+      P.O. XXXXXX/AAAA - OUVIDORIA
+      ATENDIMENTO INSATISFATÓRIO / SERVIÇO IRREGULAR   ← assunto destacado
+      - E M E N T A   D A   D E M A N D A:
     """
+    # Prioridade 1: linha destacada entre cabeçalho P.O. e EMENTA (estrutura da Controladoria)
     m = re.search(
-        r"(?:FALTA\s*/\s*DEMORA[^\n]*|EMENTA[^\n]*|ASSUNTO[:\s]+)([^\n]{5,120})",
-        texto,
-        re.IGNORECASE
+        r"OUVIDORIA\s*\n\s*([A-ZÁÀÃÂÉÊÍÓÔÕÚ][^\n]{5,120})\s*\n",
+        texto, re.IGNORECASE
     )
     if m:
-        return m.group(0).strip()[:120]
+        candidato = m.group(1).strip()
+        # Exclui linhas que são claramente partes do cabeçalho
+        if not re.search(r"PREFEITURA|CONTROLADORIA|ESTADO DE", candidato, re.IGNORECASE):
+            return candidato[:120]
 
-    m = re.search(r"(?:Trata-se de|Objeto[:\s]+)([^\n]{10,150})", texto, re.IGNORECASE)
+    # Prioridade 2: padrão "EMENTA DA DEMANDA:" seguido do assunto na mesma ou próxima linha
+    m = re.search(
+        r"E\s*M\s*E\s*N\s*T\s*A[^\n]*\n\s*([A-ZÁÀÃÂÉÊÍÓÔÕÚ][^\n]{5,120})",
+        texto, re.IGNORECASE
+    )
+    if m:
+        return m.group(1).strip()[:120]
+
+    # Prioridade 3: categorias conhecidas diretamente no texto
+    m = re.search(
+        r"(ATENDIMENTO\s+INSATISFAT[^\n]{0,60}|FALTA\s*/\s*DEMORA[^\n]{0,80}"
+        r"|ACESSO\s+A\s+[^\n]{0,60}|SERVI[CÇ]O\s+IRREGULAR[^\n]{0,60}"
+        r"|RECLAMAÇÃO[^\n]{0,60}|DENÚNCIA[^\n]{0,60})",
+        texto, re.IGNORECASE
+    )
+    if m:
+        return m.group(1).strip()[:120]
+
+    # Prioridade 4: campo genérico
+    m = re.search(r"(?:Trata-se de|Objeto[:\s]+|Assunto[:\s]+)([^\n]{10,150})", texto, re.IGNORECASE)
     if m:
         return m.group(1).strip()[:120]
 
     return ""
 
+
+def extrair_reclamante(texto: str, tipo: str = "OUVIDORIA") -> str:
+    """
+    Extrai o nome do reclamante (ou destinatário em respostas).
+
+    Ouvidoria: "Me chamo Silene" / "Meu nome é X"
+    Resposta:  "Prezada Sra. Elda Cristina de Lima"
+    """
+    if tipo == "RESPOSTA":
+        # "Prezada Sra. Elda Cristina de Lima,"
+        m = re.search(
+            r"Prezad[ao]\s+Sr[ao]?\.?\s+([A-ZÁÀÃÂÉÊÍÓÔÕÚ][a-záàãâéêíóôõú]+(?:\s+[A-ZÁÀÃÂÉÊÍÓÔÕÚ][a-záàãâéêíóôõú]+){1,5})",
+            texto
+        )
+        if m:
+            return m.group(1).strip()
+
+    # "Me chamo Silene tenho 32 anos"  → captura o primeiro nome/nomes
+    m = re.search(
+        r"[Mm]e\s+chamo\s+([A-ZÁÀÃÂÉÊÍÓÔÕÚ][a-záàãâéêíóôõú]+(?:\s+[A-ZÁÀÃÂÉÊÍÓÔÕÚ][a-záàãâéêíóôõú]+)*)",
+        texto
+    )
+    if m:
+        # Para "Me chamo Silene tenho 32 anos" → pega só o nome antes de "tenho"/"com"/"estou"
+        nome = re.split(r'\s+(?:tenho|com|estou|tenho|sou|e\s+)\b', m.group(1), flags=re.IGNORECASE)[0]
+        return nome.strip()
+
+    # "Meu nome é / Meu nome:"
+    m = re.search(
+        r"[Mm]eu\s+nome\s+[eé][:\s]+([A-ZÁÀÃÂÉÊÍÓÔÕÚ][a-záàãâéêíóôõú]+(?:\s+[A-ZÁÀÃÂÉÊÍÓÔÕÚ][a-záàãâéêíóôõú]+){0,4})",
+        texto
+    )
+    if m:
+        return m.group(1).strip()
+
+    return ""
+
+
 def processar_pdf(pdf_path: str) -> Dict:
-    texto = ler_pdf(pdf_path)
-    protocolo = extrair_protocolo(texto)
-    unidade   = extrair_unidade(texto)
-    data_doc  = extrair_data_documento(texto)
-    tipo      = extrair_tipo(texto)
-    assunto   = extrair_assunto(texto)
+    texto      = ler_pdf(pdf_path)
+    protocolo  = extrair_protocolo(texto)
+    unidade    = extrair_unidade(texto)
+    data_doc   = extrair_data_documento(texto)
+    tipo       = extrair_tipo(texto)
+    assunto    = extrair_assunto(texto)
+    reclamante = extrair_reclamante(texto, tipo)
 
     prazo = (data_doc + timedelta(days=PRAZO_DIAS)) if data_doc else None
 
     return {
-        "Protocolo":       protocolo or "NÃO IDENTIFICADO",
-        "Tipo":            tipo,
-        "Unidade":         unidade,
-        "Data Documento":  data_doc.strftime("%d/%m/%Y") if data_doc else "",
-        "Prazo Resposta":  prazo.strftime("%d/%m/%Y") if prazo else "",
-        "Assunto":         assunto,
-        "Arquivo":         os.path.basename(pdf_path),
-        "Status":          "PENDENTE",
+        "Protocolo":        protocolo or "NÃO IDENTIFICADO",
+        "Tipo":             tipo,
+        "Unidade":          unidade,
+        "Reclamante":       reclamante,
+        "Data Recebimento": data_doc.strftime("%d/%m/%Y") if data_doc else "",
+        "Prazo Resposta":   prazo.strftime("%d/%m/%Y") if prazo else "",
+        "Assunto":          assunto,
+        "Arquivo":          os.path.basename(pdf_path),
+        "Status":           "PENDENTE",
+        "Observações":      "",
     }
 
 # =========================
 # EXCEL: CRIAR OU ATUALIZAR
 # =========================
 COLUNAS = [
-    "Protocolo", "Tipo", "Unidade", "Data Documento",
+    "Protocolo", "Tipo", "Unidade", "Reclamante", "Data Recebimento",
     "Prazo Resposta", "Assunto", "Arquivo", "Status", "Observações"
 ]
 
@@ -455,8 +574,8 @@ def criar_ou_atualizar_excel(novos: List[Dict]) -> None:
 
     # Ajusta largura das colunas
     larguras = {
-        "Protocolo": 18, "Tipo": 12, "Unidade": 28,
-        "Data Documento": 16, "Prazo Resposta": 16,
+        "Protocolo": 18, "Tipo": 12, "Unidade": 28, "Reclamante": 22,
+        "Data Recebimento": 16, "Prazo Resposta": 16,
         "Assunto": 45, "Arquivo": 35, "Status": 12, "Observações": 30
     }
     for col_idx, col_nome in enumerate(COLUNAS, 1):
@@ -576,11 +695,12 @@ def main(data_inicial: Optional[date] = None, data_final: Optional[date] = None,
             dados = processar_pdf(caminho)
             dados["EmailUID"] = uid
 
-            print(f"  Protocolo : {dados['Protocolo']}")
-            print(f"  Tipo      : {dados['Tipo']}")
-            print(f"  Unidade   : {dados['Unidade']}")
-            print(f"  Data      : {dados['Data Documento']}")
-            print(f"  Prazo     : {dados['Prazo Resposta']}")
+            print(f"  Protocolo  : {dados['Protocolo']}")
+            print(f"  Tipo       : {dados['Tipo']}")
+            print(f"  Unidade    : {dados['Unidade']}")
+            print(f"  Reclamante : {dados.get('Reclamante','')}")
+            print(f"  Data       : {dados.get('Data Recebimento','')}")
+            print(f"  Prazo      : {dados['Prazo Resposta']}")
 
             # Move arquivo para pasta correta
             if dados["Tipo"] == "RESPOSTA":

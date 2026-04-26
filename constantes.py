@@ -42,42 +42,40 @@ COLUNAS_OUV = ["Protocolo","Unidade","Data Recebimento","Prazo Resposta",
 # Regras e pesos para classificação de documentos (RESPOSTA vs OUVIDORIA)
 # Podem ser ajustadas sem editar os detectores.
 SINAIS_RESPOSTA = [
+    # Frases exclusivas de resposta de unidade
+    r"Resposta\s+à\s+Manifesta[çc][aã]o\s+de\s+Ouvidoria",  # título do doc 2
     r"EM RESPOSTA",
     r"VIMOS RESPONDER",
     r"RESPONDEMOS",
     r"INFORMAMOS QUE",
     r"ESCLARECEMOS",
     r"RETORNO À MANIFESTAÇÃO",
-    r"RETORNO A",
-    r"RESPOSTA",
+    r"Agradecemos\s+por\s+entrar\s+em\s+contato",
     r"ATENCIOSAMENTE",
-    r"ASSINADO",
+    r"Enfermeira[/\s]Gerente",
+    r"Coordenadora\s+da\s+Unidade",
     r"OFÍCIO",
-    r"OFICIO",
-    r"DESPACHO",
     r"COMUNICAMOS",
-    r"REF\.|REF:\s*RESPOSTA",
 ]
 
 SINAIS_OUVIDORIA = [
-    r"OUVIDORIA",
-    r"MANIFESTAÇÃO",
-    r"DEMANDA",
-    r"ENCAMINHAMENTO",
-    r"CONTROLADORIA",
-    r"FALTA",
-    r"DEMORA",
-    r"P\.O\.",
+    # Estrutura exclusiva do documento da Controladoria
+    r"CONTROLADORIA\s+GERAL\s+DO\s+MUNIC",
+    r"E\s*M\s*E\s*N\s*T\s*A\s+D\s*A\s+D\s*E\s*M\s*A\s*N\s*D\s*A",  # "E M E N T A D A D E M A N D A"
+    r"E\s*N\s*C\s*A\s*M\s*I\s*N\s*H\s*A\s*M\s*E\s*N\s*T\s*O",      # "E N C A M I N H A M E N T O"
+    r"Lei\s+13\.460",
+    r"MANIFESTAÇÃO DE USUÁRIO",
+    r"P\.O\.\s+\d{3,6}",
+    r"RECOMENDAMOS",
     r"PROTOCOLO",
     r"RECLAMAÇÃO",
     r"DENÚNCIA",
     r"SOLICITA",
-    r"REQUERIMENTO",
 ]
 
 # Pesos/boosts aplicados pelo classificador
 CLASSIFIER_WEIGHTS = {
-    "inicio_boost": 2,   # bônus se o início do documento tem sinais de resposta
+    "inicio_boost": 3,   # bônus se o início do documento tem sinais de resposta
     "resposta_weight": 1,
     "ouvidoria_weight": 1,
 }

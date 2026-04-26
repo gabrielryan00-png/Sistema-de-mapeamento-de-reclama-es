@@ -68,10 +68,14 @@ tesseract_lock = threading.Lock()
 
 # Compilar regex fora de loops para performance
 PATTERNS_PROTOCOLO = [
-    re.compile(r"P\.?\s*O\.?\s*[:\-]?\s*(\d{6}[\s/]\d{4})", re.IGNORECASE),
-    re.compile(r"ouvidoria\s*n[oº°]?\s*(\d{6}/\d{4}|\d{6})", re.IGNORECASE),
+    # P.O. 003279/2026  — formato Controladoria (4-6 dígitos + ano)
+    re.compile(r"P\.?\s*O\.?\s*[:\-]?\s*(\d{4,6})\s*[/\-]\s*(\d{4})", re.IGNORECASE),
+    # Ref. PO 2278 / Ref: P.O. 2278 — cabeçalho de resposta de unidade
+    re.compile(r"Ref\.?\s*[:\-]?\s*P\.?\s*O\.?\s*[\.\-\s]*(\d{3,6})", re.IGNORECASE),
+    # PO XXXX isolado (sem Ref., sem ano)
+    re.compile(r"\bP\.?\s*O\.?\s+(\d{3,6})\b", re.IGNORECASE),
+    # Campo genérico "Protocolo:"
     re.compile(r"(?:Protocolo|Proc\.?|N[uú]mero)[:\s#]*(\d{4,}[\s/.-]\d{2,4})", re.IGNORECASE),
-    re.compile(r"\b(\d{6}/\d{4})\b", re.IGNORECASE),
 ]
 
 PATTERN_UNIDADE = re.compile(r"PARA\s*:\s*([^\n]{3,80})", re.IGNORECASE)
@@ -82,8 +86,14 @@ PATTERNS_DATA = [
     (re.compile(r"(\d{4}[-/]\d{2}[-/]\d{2})", re.IGNORECASE), ["%Y-%m-%d", "%Y/%m/%d"]),
 ]
 
-PATTERN_ASSUNTO = re.compile(r"(?:FALTA\s*/\s*DEMORA[^\n]*|EMENTA[^\n]*|ASSUNTO[:\s]+)([^\n]{5,120})", re.IGNORECASE)
-PATTERN_ASSUNTO_ALT = re.compile(r"(?:Trata-se de|Objeto[:\s]+)([^\n]{10,150})", re.IGNORECASE)
+PATTERN_ASSUNTO = re.compile(
+    r"OUVIDORIA\s*\n\s*([A-ZÁÀÃÂÉÊÍÓÔÕÚ][^\n]{5,120})\s*\n", re.IGNORECASE)
+PATTERN_ASSUNTO_EMENTA = re.compile(
+    r"E\s*M\s*E\s*N\s*T\s*A[^\n]*\n\s*([A-ZÁÀÃÂÉÊÍÓÔÕÚ][^\n]{5,120})", re.IGNORECASE)
+PATTERN_ASSUNTO_CAT = re.compile(
+    r"(ATENDIMENTO\s+INSATISFAT[^\n]{0,60}|FALTA\s*/\s*DEMORA[^\n]{0,80}"
+    r"|SERVI[CÇ]O\s+IRREGULAR[^\n]{0,60}|RECLAMAÇÃO[^\n]{0,60})", re.IGNORECASE)
+PATTERN_ASSUNTO_ALT = re.compile(r"(?:Trata-se de|Objeto[:\s]+|Assunto[:\s]+)([^\n]{10,150})", re.IGNORECASE)
 
 # Cache para normalização (evita reprocessamento)
 _CACHE_NORM = {}
@@ -260,9 +270,19 @@ def verificar_sinais_ouvidoria(texto: str) -> bool:
     return False
 
 def extrair_protocolo(texto: str) -> str:
-    for pat in PATTERNS_PROTOCOLO:
+    # Padrão 0 e 1: com grupo (numero, ano) separados
+    for pat in PATTERNS_PROTOCOLO[:2]:
         m = pat.search(texto)
-        if m: return m.group(1).replace(" ", "/").strip()
+        if m:
+            grupos = m.groups()
+            if len(grupos) == 2:
+                return f"P.O. {grupos[0]}/{grupos[1]}"
+            return f"P.O. {grupos[0]}"
+    # Padrões 2+: grupo único
+    for pat in PATTERNS_PROTOCOLO[2:]:
+        m = pat.search(texto)
+        if m:
+            return f"P.O. {m.group(1).replace(' ', '/').strip()}"
     return ""
 
 def extrair_unidade(texto: str) -> str:
@@ -294,18 +314,58 @@ def extrair_data_documento(texto: str) -> Optional[date]:
     return None
 
 def extrair_tipo(texto: str) -> str:
+    inicio = texto[:600]
+    # Regra 1: título exclusivo de resposta de unidade
+    if re.search(r"Resposta\s+à\s+Manifesta[çc][aã]o\s+de\s+Ouvidoria", inicio, re.IGNORECASE):
+        return "RESPOSTA"
+    # Regra 2: estrutura da Controladoria → ouvidoria
+    if re.search(r"E\s*M\s*E\s*N\s*T\s*A\s+D\s*A\s+D\s*E\s*M\s*A\s*N\s*D\s*A", texto, re.IGNORECASE):
+        return "OUVIDORIA"
+    if re.search(r"CONTROLADORIA\s+GERAL\s+DO\s+MUNIC", inicio, re.IGNORECASE) and \
+       re.search(r"ENCAMINHAMENTO", texto, re.IGNORECASE):
+        return "OUVIDORIA"
+    # Regra 3: assinatura de gerente/enfermeira → resposta
+    if re.search(r"Atenciosamente", texto, re.IGNORECASE) and \
+       re.search(r"Enfermeira|Gerente|Coordenadora|Diretor", texto, re.IGNORECASE):
+        return "RESPOSTA"
+    # Fallback
     tu = texto.upper()
-    if any(s in tu for s in ["EM RESPOSTA","VIMOS RESPONDER","RESPONDEMOS","ESCLAREÇO",
-                               "ESCLARECEMOS","RETORNO À MANIFESTAÇÃO","REF.: RESPOSTA",
-                               "RESPOSTA À OUVIDORIA","RESPOSTA AO PROTOCOLO"]):
+    if any(s in tu for s in ["EM RESPOSTA","VIMOS RESPONDER","RESPONDEMOS",
+                               "RETORNO À MANIFESTAÇÃO","RESPOSTA À OUVIDORIA"]):
         return "RESPOSTA"
     return "OUVIDORIA"
 
 def extrair_assunto(texto: str) -> str:
+    # Linha destacada entre P.O./OUVIDORIA e EMENTA (estrutura Controladoria)
     m = PATTERN_ASSUNTO.search(texto)
-    if m: return m.group(0).strip()[:120]
+    if m:
+        cand = m.group(1).strip()
+        if not re.search(r"PREFEITURA|CONTROLADORIA|ESTADO DE", cand, re.IGNORECASE):
+            return cand[:120]
+    m = PATTERN_ASSUNTO_EMENTA.search(texto)
+    if m: return m.group(1).strip()[:120]
+    m = PATTERN_ASSUNTO_CAT.search(texto)
+    if m: return m.group(1).strip()[:120]
     m = PATTERN_ASSUNTO_ALT.search(texto)
     if m: return m.group(1).strip()[:120]
+    return ""
+
+def extrair_reclamante(texto: str, tipo: str = "OUVIDORIA") -> str:
+    if tipo == "RESPOSTA":
+        m = re.search(
+            r"Prezad[ao]\s+Sr[ao]?\.?\s+([A-ZÁÀÃÂÉÊÍÓÔÕÚ][a-záàãâéêíóôõú]+"
+            r"(?:\s+[A-ZÁÀÃÂÉÊÍÓÔÕÚ][a-záàãâéêíóôõú]+){1,5})", texto)
+        if m: return m.group(1).strip()
+    m = re.search(
+        r"[Mm]e\s+chamo\s+([A-ZÁÀÃÂÉÊÍÓÔÕÚ][a-záàãâéêíóôõú]+"
+        r"(?:\s+[A-ZÁÀÃÂÉÊÍÓÔÕÚ][a-záàãâéêíóôõú]+)*)", texto)
+    if m:
+        nome = re.split(r'\s+(?:tenho|com|estou|sou)\b', m.group(1), flags=re.IGNORECASE)[0]
+        return nome.strip()
+    m = re.search(
+        r"[Mm]eu\s+nome\s+[eé][:\s]+([A-ZÁÀÃÂÉÊÍÓÔÕÚ][a-záàãâéêíóôõú]+"
+        r"(?:\s+[A-ZÁÀÃÂÉÊÍÓÔÕÚ][a-záàãâéêíóôõú]+){0,4})", texto)
+    if m: return m.group(1).strip()
     return ""
 
 def processar_documento(file_path: str, data_recebimento: Optional[date], prazo_dias: int, log) -> Dict:
@@ -330,33 +390,34 @@ def processar_documento(file_path: str, data_recebimento: Optional[date], prazo_
             log("  ⚡ Sem sinais de ouvidoria, pulando extração.")
             return {"nao_ouvidoria": True}
     
-    protocolo = extrair_protocolo(texto)
-    unidade   = extrair_unidade(texto)
-    data_doc  = extrair_data_documento(texto)
-    tipo      = extrair_tipo(texto)
-    assunto   = extrair_assunto(texto)
+    protocolo  = extrair_protocolo(texto)
+    unidade    = extrair_unidade(texto)
+    data_doc   = extrair_data_documento(texto)
+    tipo       = extrair_tipo(texto)
+    assunto    = extrair_assunto(texto)
+    reclamante = extrair_reclamante(texto, tipo)
     base_prazo = data_recebimento or data_doc
     prazo      = (base_prazo + timedelta(days=prazo_dias)) if base_prazo else None
-    
-    # Observações para casos com extração incompleta
+
     observacoes = ""
     if protocolo in ("", "NÃO IDENTIFICADO") or unidade == "NÃO IDENTIFICADA":
         observacoes = "Indeterminada - Revisar extração: sinais de ouvidoria detectados mas dados incompletos. Possível revisão manual necessária."
         log("  ⚠️  Indeterminada: sinais de ouvidoria mas extração incompleta, incluindo com observações.")
-    
+
+    data_rec_str = (data_recebimento or data_doc)
     return {
-        "Protocolo":         protocolo or "NÃO IDENTIFICADO",
-        "Tipo":              tipo,
-        "Unidade":           unidade,
-        "Data Documento":    data_doc.strftime("%d/%m/%Y") if data_doc else "",
-        "Data Recebimento":  data_recebimento.strftime("%d/%m/%Y") if data_recebimento else "",
-        "Prazo Resposta":    prazo.strftime("%d/%m/%Y") if prazo else "",
-        "Assunto":           assunto,
-        "Arquivo":           os.path.basename(file_path),
-        "Status":            "PENDENTE",
-        "Data Respondida":   "",
-        "Arquivo Resposta":  "",
-        "Observações":       observacoes,
+        "Protocolo":        protocolo or "NÃO IDENTIFICADO",
+        "Tipo":             tipo,
+        "Unidade":          unidade,
+        "Reclamante":       reclamante,
+        "Data Recebimento": data_rec_str.strftime("%d/%m/%Y") if data_rec_str else "",
+        "Prazo Resposta":   prazo.strftime("%d/%m/%Y") if prazo else "",
+        "Assunto":          assunto,
+        "Arquivo":          os.path.basename(file_path),
+        "Status":           "PENDENTE",
+        "Data Respondida":  "",
+        "Arquivo Resposta": "",
+        "Observações":      observacoes,
     }
 
 # =============================================================================
