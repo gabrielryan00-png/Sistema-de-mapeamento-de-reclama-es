@@ -95,17 +95,17 @@ def extrair_protocolo(texto: str) -> str:
       - "P.O. 003279/2026 - OUVIDORIA" (linha de cabeçalho)
     """
     # Prioridade 1: P.O. XXXXXX/AAAA — formato canônico da Controladoria
-    m = re.search(r"P\.?\s*O\.?\s*[:\-]?\s*(\d{4,6})\s*[/\-]\s*(\d{4})", texto, re.IGNORECASE)
+    m = re.search(r"P\.?\s*O\.?\s*[:\-]?\s*(\d{3,})\s*[/\-]\s*(\d{4})", texto, re.IGNORECASE)
     if m:
         return f"P.O. {m.group(1)}/{m.group(2)}"
 
     # Prioridade 2: "Ref. PO XXXX" ou "Ref: P.O. XXXX" — cabeçalho de resposta
-    m = re.search(r"Ref\.?\s*[:\-]?\s*P\.?\s*O\.?\s*[\.\-\s]*(\d{3,6})", texto, re.IGNORECASE)
+    m = re.search(r"Ref\.?\s*[:\-]?\s*P\.?\s*O\.?\s*[\.\-\s]*(\d{3,})", texto, re.IGNORECASE)
     if m:
         return f"P.O. {m.group(1)}"
 
     # Prioridade 3: "PO XXXX" isolado (sem Ref., sem ano)
-    m = re.search(r"\bP\.?\s*O\.?\s+(\d{3,6})\b", texto, re.IGNORECASE)
+    m = re.search(r"\bP\.?\s*O\.?\s+(\d{3,})\b", texto, re.IGNORECASE)
     if m:
         return f"P.O. {m.group(1)}"
 
@@ -370,7 +370,7 @@ def extrair_tipo(texto: str) -> str:
         return "OUVIDORIA"
 
     # Empate: "P.O. XXXXX" é exclusivo de ouvidoria
-    if re.search(r"\bP\.?\s*O\.\s+\d{3,6}", texto, re.IGNORECASE):
+    if re.search(r"\bP\.?\s*O\.\s+\d{3,}", texto, re.IGNORECASE):
         return "OUVIDORIA"
 
     return "OUVIDORIA"

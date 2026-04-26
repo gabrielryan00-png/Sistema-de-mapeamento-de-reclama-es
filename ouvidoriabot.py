@@ -69,11 +69,11 @@ tesseract_lock = threading.Lock()
 # Compilar regex fora de loops para performance
 PATTERNS_PROTOCOLO = [
     # P.O. 003279/2026  — formato Controladoria (4-6 dígitos + ano)
-    re.compile(r"P\.?\s*O\.?\s*[:\-]?\s*(\d{4,6})\s*[/\-]\s*(\d{4})", re.IGNORECASE),
+    re.compile(r"P\.?\s*O\.?\s*[:\-]?\s*(\d{3,})\s*[/\-]\s*(\d{4})", re.IGNORECASE),
     # Ref. PO 2278 / Ref: P.O. 2278 — cabeçalho de resposta de unidade
-    re.compile(r"Ref\.?\s*[:\-]?\s*P\.?\s*O\.?\s*[\.\-\s]*(\d{3,6})", re.IGNORECASE),
+    re.compile(r"Ref\.?\s*[:\-]?\s*P\.?\s*O\.?\s*[\.\-\s]*(\d{3,})", re.IGNORECASE),
     # PO XXXX isolado (sem Ref., sem ano)
-    re.compile(r"\bP\.?\s*O\.?\s+(\d{3,6})\b", re.IGNORECASE),
+    re.compile(r"\bP\.?\s*O\.?\s+(\d{3,})\b", re.IGNORECASE),
     # Campo genérico "Protocolo:"
     re.compile(r"(?:Protocolo|Proc\.?|N[uú]mero)[:\s#]*(\d{4,}[\s/.-]\d{2,4})", re.IGNORECASE),
 ]
