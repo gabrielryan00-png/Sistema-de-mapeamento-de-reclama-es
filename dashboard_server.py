@@ -83,13 +83,20 @@ if FASTAPI_OK:
         log = []
         def lf(msg): log.append(str(msg))
         try:
-            import ouvidoriagmail as _gm
-            hoje = date.today()
-            lf(f"▶ Auto-scan {hoje} (apenas não lidos)…")
-            with _PROC_LOCK:
-                result = _gm.processar_emails_api(hoje, hoje, log_func=lf, somente_nao_lidos=True)
+            cfg = _cfg()
+            if cfg.get('usar_agente', True):
+                lf('▶ Agente autônomo iniciado…')
+                import agente_ouvidoria as _ag
+                with _PROC_LOCK:
+                    result = _ag.executar_ciclo(cfg, log=lf)
+            else:
+                import ouvidoriagmail as _gm
+                hoje = date.today()
+                lf(f"▶ Auto-scan {hoje} (apenas não lidos)…")
+                with _PROC_LOCK:
+                    result = _gm.processar_emails_api(hoje, hoje, log_func=lf, somente_nao_lidos=True)
             _SCHED_STATUS['last_result'] = result or {}
-            lf(f"✔ Concluído: {result}")
+            lf(f"✔ Concluído")
         except Exception as e:
             _SCHED_STATUS['last_result'] = {'error': str(e)}
             lf(f"❌ {e}")
