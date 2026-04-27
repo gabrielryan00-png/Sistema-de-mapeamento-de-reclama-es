@@ -137,8 +137,19 @@ function CommandCenter({ standalone = false }) {
   const [busca,         setBusca]         = React.useState('');
   const [sort,          setSort]          = React.useState({ col:'diasRestantes', dir:'asc' });
   const [sel,            setSel]           = React.useState(null);
-  const [showLembretes,  setShowLembretes] = React.useState(false);
+  const [showLembretes,    setShowLembretes]    = React.useState(false);
   const [showBuscarEmails, setShowBuscarEmails] = React.useState(false);
+  const [showScheduler,    setShowScheduler]    = React.useState(false);
+  const [schedStatus,      setSchedStatus]      = React.useState(null);
+
+  React.useEffect(() => {
+    const fetchSched = () =>
+      fetch('/api/scheduler/status').then(r => r.ok ? r.json() : null)
+        .then(d => d && setSchedStatus(d)).catch(() => {});
+    fetchSched();
+    const id = setInterval(fetchSched, 15000);
+    return () => clearInterval(id);
+  }, []);
 
   const filtered = React.useMemo(() => {
     let arr = DATASET;
@@ -281,6 +292,23 @@ function CommandCenter({ standalone = false }) {
         <button onClick={exportCSV} style={{ background:'transparent', color:CC.text,
           border:`1px solid ${CC.border}`, borderRadius:6, padding:'6px 12px',
           fontSize:12, cursor:'pointer', fontFamily:CC.fontSans, letterSpacing:0.2 }}>Exportar CSV</button>
+        <button onClick={() => setShowScheduler(true)} title="Configurar auto-scan de e-mails"
+          style={{ display:'flex', alignItems:'center', gap:6,
+            background: schedStatus?.enabled ? 'oklch(0.24 0.06 150)' : CC.surface2,
+            color: schedStatus?.enabled ? 'oklch(0.82 0.13 150)' : CC.textDim,
+            border: `1px solid ${schedStatus?.enabled ? 'oklch(0.38 0.10 150)' : CC.border}`,
+            borderRadius:6, padding:'6px 10px', fontSize:11, cursor:'pointer',
+            fontFamily:CC.fontMono, letterSpacing:0.2, fontWeight:500 }}>
+          <span style={{ width:7, height:7, borderRadius:'50%', flexShrink:0,
+            background: schedStatus?.running ? CC.warn
+              : schedStatus?.enabled ? 'oklch(0.72 0.13 150)'
+              : CC.textMute,
+            boxShadow: (schedStatus?.enabled && !schedStatus?.running)
+              ? '0 0 6px oklch(0.72 0.13 150)' : 'none' }}/>
+          {schedStatus?.enabled
+            ? (schedStatus?.running ? 'Lendo…' : `Auto · ${schedStatus.interval}min`)
+            : 'Auto-scan off'}
+        </button>
         <button onClick={() => setShowBuscarEmails(true)} style={{
           background:`oklch(0.26 0.06 150)`, color:`oklch(0.82 0.13 150)`,
           border:`1px solid oklch(0.38 0.10 150)`, borderRadius:6, padding:'6px 12px',
@@ -324,6 +352,120 @@ function CommandCenter({ standalone = false }) {
       )}
       {showLembretes    && <LembretesModal    onClose={() => setShowLembretes(false)} />}
       {showBuscarEmails && <BuscarEmailsModal onClose={() => setShowBuscarEmails(false)} />}
+      {showScheduler    && <SchedulerModal    onClose={() => setShowScheduler(false)}
+                             status={schedStatus} onStatusChange={setSchedStatus} />}
+    </div>
+  );
+}
+
+function SchedulerModal({ onClose, status, onStatusChange }) {
+  const [interval, setIntervalVal] = React.useState((status?.interval || 20).toString());
+  const [busy,     setBusy]        = React.useState(false);
+  const [log,      setLog]         = React.useState(status?.last_log || []);
+  const enabled = status?.enabled;
+
+  const refreshStatus = () =>
+    fetch('/api/scheduler/status').then(r => r.json())
+      .then(d => { onStatusChange(d); setLog(d.last_log || []); });
+
+  const handleToggle = async () => {
+    setBusy(true);
+    try {
+      if (enabled) {
+        await fetch('/api/scheduler/stop', { method:'POST' });
+      } else {
+        await fetch('/api/scheduler/start', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ interval_min: parseInt(interval) || 20 })
+        });
+      }
+      await refreshStatus();
+    } finally { setBusy(false); }
+  };
+
+  const handleRunNow = async () => {
+    setBusy(true);
+    try {
+      await fetch('/api/scheduler/executar-agora', { method:'POST' });
+      await new Promise(r => setTimeout(r, 1500));
+      await refreshStatus();
+    } finally { setBusy(false); }
+  };
+
+  const fmt = iso => iso ? iso.replace('T', ' ').slice(0, 16) : '—';
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', display:'flex',
+      alignItems:'center', justifyContent:'center', zIndex:1000 }}>
+      <div style={{ background:CC.surface, border:`1px solid ${CC.border}`, borderRadius:12,
+        padding:28, width:460, maxWidth:'90vw', display:'flex', flexDirection:'column', gap:18 }}>
+
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <span style={{ fontSize:15, fontWeight:600, letterSpacing:0.2 }}>⏱ Auto-scan de E-mails</span>
+          <button onClick={onClose} style={{ background:'transparent', border:'none',
+            color:CC.textMute, fontSize:18, cursor:'pointer', padding:'0 4px' }}>✕</button>
+        </div>
+
+        <div style={{ fontSize:12, color:CC.textDim, lineHeight:1.6 }}>
+          Verifica automaticamente a caixa de ouvidorias a cada <strong style={{ color:CC.text }}>N minutos</strong>,
+          classifica os e-mails não lidos como Ouvidoria ou Resposta e registra no Excel.
+        </div>
+
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <label style={{ fontSize:12, color:CC.textDim, whiteSpace:'nowrap' }}>Intervalo (min):</label>
+          <input type="number" min="5" max="1440" value={interval}
+            onChange={e => setIntervalVal(e.target.value)}
+            disabled={enabled}
+            style={{ width:70, background:CC.surface2, border:`1px solid ${CC.border}`,
+              color:CC.text, borderRadius:6, padding:'5px 8px', fontSize:13,
+              fontFamily:CC.fontMono, outline:'none' }} />
+        </div>
+
+        <div style={{ display:'flex', gap:10 }}>
+          <button onClick={handleToggle} disabled={busy} style={{
+            flex:1, padding:'8px 0', borderRadius:7, fontSize:13, fontWeight:600,
+            cursor: busy ? 'not-allowed' : 'pointer', border:'none',
+            background: enabled ? 'oklch(0.32 0.10 28)' : 'oklch(0.30 0.10 150)',
+            color: enabled ? 'oklch(0.85 0.14 28)' : 'oklch(0.85 0.14 150)',
+            opacity: busy ? 0.6 : 1 }}>
+            {busy ? '…' : enabled ? '⏹ Desativar auto-scan' : '▶ Ativar auto-scan'}
+          </button>
+          <button onClick={handleRunNow} disabled={busy || status?.running} style={{
+            padding:'8px 14px', borderRadius:7, fontSize:12, fontWeight:500,
+            cursor: (busy || status?.running) ? 'not-allowed' : 'pointer',
+            border:`1px solid ${CC.border}`, background:CC.surface2, color:CC.text,
+            opacity: (busy || status?.running) ? 0.5 : 1 }}>
+            {status?.running ? 'Lendo…' : '▷ Executar agora'}
+          </button>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8,
+          background:CC.surface2, borderRadius:8, padding:'10px 14px',
+          fontSize:11, fontFamily:CC.fontMono, color:CC.textDim }}>
+          <span>Status:</span>
+          <span style={{ color: status?.running ? CC.warn : enabled ? 'oklch(0.72 0.13 150)' : CC.textMute }}>
+            {status?.running ? '● Processando' : enabled ? '● Ativo' : '○ Inativo'}
+          </span>
+          <span>Último ciclo:</span><span style={{ color:CC.text }}>{fmt(status?.last_run)}</span>
+          <span>Próximo ciclo:</span><span style={{ color:CC.text }}>{fmt(status?.next_run)}</span>
+          {status?.last_result && <>
+            <span>Resultado:</span>
+            <span style={{ color:CC.text }}>
+              {status.last_result.error
+                ? `❌ ${status.last_result.error}`
+                : `✔ ouv:${status.last_result.ouvidorias||0} / resp:${status.last_result.respostas||0}`}
+            </span>
+          </>}
+        </div>
+
+        {log.length > 0 && (
+          <div style={{ background:'oklch(0.14 0.005 80)', borderRadius:8,
+            padding:'10px 12px', maxHeight:140, overflowY:'auto',
+            fontFamily:CC.fontMono, fontSize:11, color:CC.textDim, lineHeight:1.7 }}>
+            {log.map((l, i) => <div key={i}>{l}</div>)}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -4,7 +4,7 @@ import json
 import time
 import uuid
 import threading
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 _BASE         = os.path.dirname(os.path.abspath(__file__))
 DASHBOARD_DIR = os.path.join(_BASE, 'dashboard')
@@ -63,6 +63,98 @@ if FASTAPI_OK:
             _JOBS[job_id]['status'] = 'error'
             _JOBS[job_id]['result'] = {'error': str(e)}
             lf(f"❌ {e}")
+
+    # ── auto-scheduler ─────────────────────────────────────────────────────────
+    _SCHED_STATUS: dict = {
+        'enabled':    False,
+        'interval':   20,
+        'last_run':   None,
+        'next_run':   None,
+        'running':    False,
+        'last_log':   [],
+        'last_result': None,
+    }
+    _sched_instance = None
+
+    def _scheduler_ciclo():
+        if _SCHED_STATUS['running']:
+            return
+        _SCHED_STATUS['running'] = True
+        log = []
+        def lf(msg): log.append(str(msg))
+        try:
+            import ouvidoriagmail as _gm
+            hoje = date.today()
+            lf(f"▶ Auto-scan {hoje} (apenas não lidos)…")
+            with _PROC_LOCK:
+                result = _gm.processar_emails_api(hoje, hoje, log_func=lf, somente_nao_lidos=True)
+            _SCHED_STATUS['last_result'] = result or {}
+            lf(f"✔ Concluído: {result}")
+        except Exception as e:
+            _SCHED_STATUS['last_result'] = {'error': str(e)}
+            lf(f"❌ {e}")
+        finally:
+            _SCHED_STATUS['running']  = False
+            _SCHED_STATUS['last_run'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+            _SCHED_STATUS['last_log'] = log
+            _update_next_run()
+
+    def _update_next_run():
+        if _sched_instance and _SCHED_STATUS['enabled']:
+            jobs = _sched_instance.get_jobs()
+            if jobs:
+                nxt = jobs[0].next_run_time
+                _SCHED_STATUS['next_run'] = nxt.strftime('%Y-%m-%dT%H:%M:%S') if nxt else None
+
+    def _start_auto_scheduler(interval_min: int = 20):
+        global _sched_instance
+        try:
+            from apscheduler.schedulers.background import BackgroundScheduler
+        except ImportError:
+            print('[Scheduler] APScheduler não instalado — execute: pip install apscheduler')
+            return False
+        if _sched_instance and _sched_instance.running:
+            _sched_instance.shutdown(wait=False)
+        _sched_instance = BackgroundScheduler(daemon=True)
+        _sched_instance.add_job(_scheduler_ciclo, 'interval', minutes=interval_min, id='auto_scan',
+                                 next_run_time=datetime.now() + timedelta(seconds=5))
+        _sched_instance.start()
+        _SCHED_STATUS['enabled']  = True
+        _SCHED_STATUS['interval'] = interval_min
+        _update_next_run()
+        print(f'[Scheduler] Iniciado — intervalo {interval_min} min')
+        return True
+
+    def _stop_auto_scheduler():
+        global _sched_instance
+        if _sched_instance and _sched_instance.running:
+            _sched_instance.shutdown(wait=False)
+        _sched_instance = None
+        _SCHED_STATUS['enabled']  = False
+        _SCHED_STATUS['next_run'] = None
+        print('[Scheduler] Parado')
+
+    # ── routes: scheduler ──────────────────────────────────────────────────────
+    @app.get('/api/scheduler/status')
+    async def api_sched_status():
+        return _SCHED_STATUS
+
+    @app.post('/api/scheduler/start')
+    async def api_sched_start(request: Request):
+        body = await request.json() or {}
+        interval = int(body.get('interval_min', _cfg().get('scheduler_interval_min', 20)))
+        ok = _start_auto_scheduler(interval)
+        return {'ok': ok, 'status': _SCHED_STATUS}
+
+    @app.post('/api/scheduler/stop')
+    async def api_sched_stop():
+        _stop_auto_scheduler()
+        return {'ok': True}
+
+    @app.post('/api/scheduler/executar-agora')
+    async def api_sched_run_now(background_tasks: BackgroundTasks):
+        background_tasks.add_task(_scheduler_ciclo)
+        return {'ok': True, 'message': 'Ciclo iniciado em background'}
 
     # ── JSX bundle ─────────────────────────────────────────────────────────────
     _JSX_FILES = ['data.jsx', 'mapa-unidades.jsx', 'split-triagem.jsx', 'command-center.jsx']
@@ -324,6 +416,16 @@ def start_server(port: int = PORT) -> int:
     if _started:
         return port
     _started = True
+
+    # auto-start scheduler if enabled in config
+    try:
+        with open(CONFIG_FILE, encoding='utf-8') as _cf:
+            _sc = json.load(_cf)
+        if _sc.get('scheduler_enabled'):
+            interval = int(_sc.get('scheduler_interval_min', 20))
+            _start_auto_scheduler(interval)
+    except Exception:
+        pass
 
     def _run():
         uvicorn.run(app, host='127.0.0.1', port=port, log_level='error')

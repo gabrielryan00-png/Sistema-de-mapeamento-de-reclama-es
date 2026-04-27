@@ -629,7 +629,7 @@ def carregar_message_ids_processados(imap) -> set:
 # =========================
 # PIPELINE PRINCIPAL
 # =========================
-def processar_emails_api(data_inicial, data_final, log_func=print):
+def processar_emails_api(data_inicial, data_final, log_func=print, somente_nao_lidos=False):
     """Entry point para uso via API — carrega credenciais do config.json."""
     import json as _json
     cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
@@ -645,7 +645,7 @@ def processar_emails_api(data_inicial, data_final, log_func=print):
     REMETENTE_OUVIDORIA = _cfg.get('remetente_ouvidoria', REMETENTE_OUVIDORIA)
 
     main(data_inicial=data_inicial, data_final=data_final,
-         somente_nao_lidos=False, log_func=log_func)
+         somente_nao_lidos=somente_nao_lidos, log_func=log_func)
 
 
 def main(data_inicial: Optional[date] = None, data_final: Optional[date] = None,
