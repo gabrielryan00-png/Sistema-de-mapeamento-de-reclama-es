@@ -158,10 +158,11 @@ REGRAS:
 
 # ── Agent class ────────────────────────────────────────────────────────────────
 class AgenteOuvidoria:
-    def __init__(self, cfg: dict, log=print):
-        self.cfg    = cfg
-        self.log    = log
-        self.imap   = None
+    def __init__(self, cfg: dict, log=print, reprocessar=False):
+        self.cfg         = cfg
+        self.log         = log
+        self.reprocessar = reprocessar   # True = busca todos os e-mails, não só não lidos
+        self.imap        = None
         self._cache: dict = {}   # (uid, filename) → local_path
         self._tmpdir = tempfile.mkdtemp(prefix='agente_ouv_')
         self._ids_proc: set = set()
@@ -229,13 +230,15 @@ class AgenteOuvidoria:
 
     # ── Agent loop ────────────────────────────────────────────────────────────
     def executar(self):
+        modo = 'REPROCESSAR TODOS os e-mails' if self.reprocessar else 'processar e-mails pendentes'
         messages = [
             {'role': 'system', 'content': _SYSTEM},
-            {'role': 'user',   'content': 'Processe os e-mails pendentes da caixa de ouvidorias.'},
+            {'role': 'user',   'content': f'Processe: {modo} da caixa de ouvidorias.'},
         ]
-        self.log('🤖 Agente iniciado')
+        self.log(f'🤖 Agente iniciado — modo: {modo}')
 
         for iteracao in range(40):
+            messages = self._trim_history(messages)
             response = self._groq(messages)
             choice   = response['choices'][0]
             msg      = choice['message']
@@ -250,8 +253,8 @@ class AgenteOuvidoria:
             for tc in tool_calls:
                 name = tc['function']['name']
                 try:
-                    args = json.loads(tc['function']['arguments'])
-                except json.JSONDecodeError:
+                    args = json.loads(tc['function']['arguments'] or '{}') or {}
+                except (json.JSONDecodeError, TypeError):
                     args = {}
 
                 self.log(f'  🔧 {name}({", ".join(f"{k}={v!r}" for k, v in args.items())})')
@@ -268,6 +271,22 @@ class AgenteOuvidoria:
         else:
             self.log('⚠️  Limite de iterações atingido')
 
+    def _trim_history(self, messages: list) -> list:
+        """Remove pares antigos de tool_call/tool quando o histórico passa de ~40k chars."""
+        total = sum(len(json.dumps(m)) for m in messages)
+        if total < 40_000:
+            return messages
+
+        # Mantém system + user iniciais e os últimos 12 mensagens
+        head = [m for m in messages if m['role'] in ('system', 'user')][:2]
+        tail = messages[-12:]
+        # Garante que não começa com role=tool (precisa do assistant antes)
+        while tail and tail[0].get('role') == 'tool':
+            tail = tail[1:]
+        trimmed = head + tail
+        self.log(f'  🗜 Histórico compactado: {len(messages)} → {len(trimmed)} mensagens')
+        return trimmed
+
     def _exec(self, name: str, args: dict) -> dict:
         fn = getattr(self, f'_t_{name}', None)
         if fn is None:
@@ -280,39 +299,95 @@ class AgenteOuvidoria:
     # ── Tools ─────────────────────────────────────────────────────────────────
     def _t_listar_emails_pendentes(self) -> dict:
         import pyzmail
-        from ouvidoriagmail import carregar_message_ids_processados, obter_message_id
+        from ouvidoriagmail import obter_message_id
 
-        self._ids_proc = carregar_message_ids_processados(self.imap)
-        self.imap.select_folder('INBOX')
+        # Carrega IDs já processados (para deduplicação no modo normal)
+        try:
+            self.imap.select_folder(LABEL_PROCESSADO)
+            uids_proc = self.imap.search(['ALL'])
+            if uids_proc:
+                fetched = self.imap.fetch(uids_proc, ['BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]'])
+                if fetched:
+                    for uid, data in fetched.items():
+                        raw = data.get(b'BODY[HEADER.FIELDS (MESSAGE-ID)]', b'')
+                        m = re.search(rb'Message-ID:\s*(<[^>]+>)', raw, re.IGNORECASE)
+                        if m:
+                            self._ids_proc.add(m.group(1).decode().strip())
+        except Exception:
+            pass
 
-        criteria = ['UNSEEN']
-        rem = self.cfg.get('remetente_ouvidoria', '').strip()
-        if rem:
-            criteria = ['FROM', rem] + criteria
+        # Pastas a varrer
+        pastas = ['INBOX']
+        if self.reprocessar:
+            pastas += [LABEL_OUVIDORIAS, LABEL_RESPOSTAS, LABEL_PROCESSADO]
 
-        uids  = self.imap.search(criteria)
-        lista = []
+        rem      = self.cfg.get('remetente_ouvidoria', '').strip()
+        vistos   = set()
+        lista    = []
 
-        for uid in uids:
-            fetched = self.imap.fetch([uid], ['BODY.PEEK[]'])
-            msg = pyzmail.PyzMessage.factory(fetched[uid][b'BODY[]'])
-            mid = obter_message_id(msg)
-
-            if mid and mid in self._ids_proc:
+        for pasta in pastas:
+            try:
+                self.imap.select_folder(pasta)
+            except Exception:
                 continue
 
-            pdfs = [p.filename for p in msg.mailparts
-                    if p.filename and p.filename.lower().endswith('.pdf')]
-            if not pdfs:
-                continue
+            criteria = [] if self.reprocessar else ['UNSEEN']
+            if rem:
+                criteria = ['FROM', rem] + criteria
+            if not criteria:
+                criteria = ['ALL']
 
-            lista.append({
-                'uid':        int(uid),
-                'assunto':    msg.get_subject() or '',
-                'data':       str(msg.get_decoded_header('Date', ''))[:30],
-                'pdfs':       pdfs,
-                'message_id': mid,
-            })
+            uids = self.imap.search(criteria)
+
+            for uid in uids:
+                if uid in vistos:
+                    continue
+                vistos.add(uid)
+
+                try:
+                    fetched = self.imap.fetch([uid], ['BODY.PEEK[]'])
+                    if not fetched or uid not in fetched:
+                        continue
+                    raw = fetched[uid].get(b'BODY[]') or fetched[uid].get(b'BODY.PEEK[]')
+                    if not raw:
+                        continue
+                    msg = pyzmail.PyzMessage.factory(raw)
+                    mid = obter_message_id(msg)
+                except Exception:
+                    continue
+
+                if not self.reprocessar and mid and mid in self._ids_proc:
+                    continue
+
+                pdfs = [p.filename for p in msg.mailparts
+                        if p.filename and p.filename.lower().endswith('.pdf')]
+                if not pdfs:
+                    continue
+
+                # Filtra: e-mail deve ter "ouvidoria" no assunto, no corpo ou no nome do PDF
+                _TERMOS = ('ouvidoria', 'ouv.', 'p.o.', 'p.o ', 'po ')
+                assunto_lower = (msg.get_subject() or '').lower()
+                pdfs_lower    = ' '.join(pdfs).lower()
+                corpo = ''
+                if msg.text_part:
+                    try:
+                        corpo = (msg.text_part.get_payload() or b'').decode(
+                            msg.text_part.charset or 'utf-8', errors='ignore').lower()
+                    except Exception:
+                        pass
+                tem_termo = any(t in assunto_lower or t in pdfs_lower or t in corpo
+                                for t in _TERMOS)
+                if not tem_termo:
+                    continue
+
+                lista.append({
+                    'uid':        int(uid),
+                    'pasta':      pasta,
+                    'assunto':    msg.get_subject() or '',
+                    'data':       str(msg.get_decoded_header('Date', ''))[:30],
+                    'pdfs':       pdfs,
+                    'message_id': mid,
+                })
 
         return {'emails': lista, 'total': len(lista)}
 
@@ -320,18 +395,28 @@ class AgenteOuvidoria:
         import pyzmail
         from ouvidoriagmail import ler_pdf as _ler
 
-        self.imap.select_folder('INBOX')
-        fetched = self.imap.fetch([uid], ['BODY[]'])
-        msg = pyzmail.PyzMessage.factory(fetched[uid][b'BODY[]'])
+        pastas = ['INBOX', LABEL_OUVIDORIAS, LABEL_RESPOSTAS, LABEL_PROCESSADO]
+        for pasta in pastas:
+            try:
+                self.imap.select_folder(pasta)
+                fetched = self.imap.fetch([uid], ['BODY[]'])
+                if not fetched or uid not in fetched:
+                    continue
+                raw = fetched[uid].get(b'BODY[]')
+                if not raw:
+                    continue
+            except Exception:
+                continue
 
-        for part in msg.mailparts:
-            if part.filename == filename:
-                local = os.path.join(self._tmpdir, f'{uid}_{filename}')
-                with open(local, 'wb') as f:
-                    f.write(part.get_payload())
-                self._cache[(uid, filename)] = local
-                texto = _ler(local)
-                return {'texto': texto[:5000], 'chars': len(texto)}
+            msg = pyzmail.PyzMessage.factory(raw)
+            for part in msg.mailparts:
+                if part.filename == filename:
+                    local = os.path.join(self._tmpdir, f'{uid}_{filename}')
+                    with open(local, 'wb') as f:
+                        f.write(part.get_payload())
+                    self._cache[(uid, filename)] = local
+                    texto = _ler(local)
+                    return {'texto': texto[:2000], 'chars': len(texto)}
 
         return {'error': f'PDF {filename!r} não encontrado no e-mail {uid}'}
 
@@ -423,14 +508,25 @@ class AgenteOuvidoria:
         return {'ok': True, 'vinculado': ok, 'arquivo': arquivo_final}
 
     def _t_mover_e_marcar_processado(self, uid: int, tipo: str) -> dict:
-        import pyzmail
-        from ouvidoriagmail import obter_message_id
+        # Ignora UIDs inválidos/fabricados pelo modelo
+        if uid <= 0 or uid > 9_999_999:
+            return {'ok': False, 'error': f'UID inválido: {uid}'}
 
         try:
-            self.imap.select_folder('INBOX')
-            fetched = self.imap.fetch([uid], ['BODY.PEEK[]'])
-            msg = pyzmail.PyzMessage.factory(fetched[uid][b'BODY[]'])
-            mid = obter_message_id(msg)
+            pastas = ['INBOX', LABEL_OUVIDORIAS, LABEL_RESPOSTAS, LABEL_PROCESSADO]
+            encontrado = False
+            for pasta in pastas:
+                try:
+                    self.imap.select_folder(pasta)
+                    fetched = self.imap.fetch([uid], ['BODY.PEEK[HEADER.FIELDS (FROM)]'])
+                    if fetched and uid in fetched:
+                        encontrado = True
+                        break
+                except Exception:
+                    continue
+
+            if not encontrado:
+                return {'ok': False, 'error': f'E-mail UID {uid} não encontrado'}
 
             if tipo == 'OUVIDORIA':
                 self.imap.add_gmail_labels([uid], [LABEL_OUVIDORIAS])
@@ -439,8 +535,7 @@ class AgenteOuvidoria:
 
             if tipo != 'IGNORAR':
                 self.imap.add_gmail_labels([uid], [LABEL_PROCESSADO])
-                if mid:
-                    self._ids_proc.add(mid)
+
         except Exception as e:
             return {'ok': False, 'error': str(e)}
 
@@ -521,7 +616,8 @@ class AgenteOuvidoria:
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
-def executar_ciclo(cfg: Optional[dict] = None, log=print) -> dict:
+def executar_ciclo(cfg: Optional[dict] = None, log=print,
+                   reprocessar: bool = False) -> dict:
     """Entry point para uso pelo scheduler ou linha de comando."""
     if cfg is None:
         try:
@@ -536,7 +632,7 @@ def executar_ciclo(cfg: Optional[dict] = None, log=print) -> dict:
         return {'ok': False, 'error': 'groq_api_key ausente'}
 
     try:
-        with AgenteOuvidoria(cfg, log) as agente:
+        with AgenteOuvidoria(cfg, log, reprocessar=reprocessar) as agente:
             agente.executar()
         return {'ok': True}
     except Exception as e:
@@ -546,8 +642,10 @@ def executar_ciclo(cfg: Optional[dict] = None, log=print) -> dict:
 
 if __name__ == '__main__':
     import sys
+    reprocessar = '--reprocessar' in sys.argv
+
     def _log(msg):
         print(msg, flush=True)
 
-    resultado = executar_ciclo(log=_log)
+    resultado = executar_ciclo(log=_log, reprocessar=reprocessar)
     sys.exit(0 if resultado['ok'] else 1)
