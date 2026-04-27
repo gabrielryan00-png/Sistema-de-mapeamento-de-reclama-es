@@ -118,30 +118,39 @@ def _ollama(prompt: str, cfg: dict) -> Optional[dict]:
 
 
 def _groq(prompt: str, cfg: dict) -> Optional[dict]:
-    try:
-        import requests as _req
-        api_key = cfg.get('groq_api_key', '').strip()
-        if not api_key:
-            print('[LLM/Groq] groq_api_key não configurado em config.json')
-            return None
-        model = cfg.get('llm_model', 'llama-3.1-8b-instant')
-        resp  = _req.post(
-            'https://api.groq.com/openai/v1/chat/completions',
-            headers={'Authorization': f'Bearer {api_key}'},
-            json={
-                'model':       model,
-                'messages':    [{'role': 'user', 'content': prompt}],
-                'temperature': 0.1,
-                'max_tokens':  400,
-            },
-            timeout=20,
-        )
-        resp.raise_for_status()
-        content = resp.json()['choices'][0]['message']['content']
-        return _parse_json(content)
-    except Exception as e:
-        print(f'[LLM/Groq] {e}')
+    import requests as _req
+    import time as _time
+    api_key = cfg.get('groq_api_key', '').strip()
+    if not api_key:
+        print('[LLM/Groq] groq_api_key não configurado em config.json')
         return None
+    model = cfg.get('llm_model', 'llama-3.1-8b-instant')
+    for tentativa in range(3):
+        try:
+            resp = _req.post(
+                'https://api.groq.com/openai/v1/chat/completions',
+                headers={'Authorization': f'Bearer {api_key}'},
+                json={
+                    'model':       model,
+                    'messages':    [{'role': 'user', 'content': prompt}],
+                    'temperature': 0.1,
+                    'max_tokens':  400,
+                },
+                timeout=20,
+            )
+            if resp.status_code == 429:
+                espera = int(resp.headers.get('retry-after', 10))
+                print(f'[LLM/Groq] Rate limit — aguardando {espera}s (tentativa {tentativa+1}/3)')
+                _time.sleep(espera)
+                continue
+            resp.raise_for_status()
+            content = resp.json()['choices'][0]['message']['content']
+            return _parse_json(content)
+        except Exception as e:
+            print(f'[LLM/Groq] {e}')
+            if tentativa < 2:
+                _time.sleep(5)
+    return None
 
 
 def classificar(texto: str, cfg: Optional[dict] = None) -> Optional[dict]:
