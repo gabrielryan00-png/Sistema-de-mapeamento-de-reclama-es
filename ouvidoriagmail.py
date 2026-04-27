@@ -459,15 +459,34 @@ def extrair_reclamante(texto: str, tipo: str = "OUVIDORIA") -> str:
 
 
 def processar_pdf(pdf_path: str) -> Dict:
-    texto      = ler_pdf(pdf_path)
-    protocolo  = extrair_protocolo(texto)
-    unidade    = extrair_unidade(texto)
-    data_doc   = extrair_data_documento(texto)
-    tipo       = extrair_tipo(texto)
-    assunto    = extrair_assunto(texto)
-    reclamante = extrair_reclamante(texto, tipo)
+    import json as _json
+    texto = ler_pdf(pdf_path)
 
-    prazo = (data_doc + timedelta(days=PRAZO_DIAS)) if data_doc else None
+    # Tenta classificação via LLM; cai no regex se falhar/desativado
+    try:
+        import classificador_llm as _llm
+        _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
+        with open(_cfg_path, encoding='utf-8') as _f:
+            _lcfg = _json.load(_f)
+        llm = _llm.classificar(texto, _lcfg)
+    except Exception:
+        llm = None
+
+    if llm:
+        protocolo  = llm.get('protocolo') or extrair_protocolo(texto)
+        tipo       = llm.get('tipo')       or extrair_tipo(texto)
+        assunto    = llm.get('assunto')    or extrair_assunto(texto)
+        reclamante = llm.get('reclamante') or extrair_reclamante(texto, tipo)
+        data_doc   = _llm.parse_data(llm.get('data')) or extrair_data_documento(texto)
+    else:
+        protocolo  = extrair_protocolo(texto)
+        tipo       = extrair_tipo(texto)
+        assunto    = extrair_assunto(texto)
+        reclamante = extrair_reclamante(texto, tipo)
+        data_doc   = extrair_data_documento(texto)
+
+    unidade = extrair_unidade(texto)
+    prazo   = (data_doc + timedelta(days=PRAZO_DIAS)) if data_doc else None
 
     return {
         "Protocolo":        protocolo or "NÃO IDENTIFICADO",

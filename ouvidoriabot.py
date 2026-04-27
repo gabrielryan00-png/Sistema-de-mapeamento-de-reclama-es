@@ -390,12 +390,30 @@ def processar_documento(file_path: str, data_recebimento: Optional[date], prazo_
             log("  ⚡ Sem sinais de ouvidoria, pulando extração.")
             return {"nao_ouvidoria": True}
     
-    protocolo  = extrair_protocolo(texto)
+    # Tenta classificação via LLM; cai no regex se falhar/desativado
+    llm = None
+    try:
+        import classificador_llm as _llm
+        llm = _llm.classificar(texto, cfg)
+        if llm:
+            log(f"  🤖 LLM: {llm.get('tipo')} (confiança {llm.get('confianca', 0):.0%})")
+    except Exception:
+        pass
+
+    if llm:
+        protocolo  = llm.get('protocolo') or extrair_protocolo(texto)
+        tipo       = llm.get('tipo')       or extrair_tipo(texto)
+        assunto    = llm.get('assunto')    or extrair_assunto(texto)
+        reclamante = llm.get('reclamante') or extrair_reclamante(texto, tipo)
+        data_doc   = _llm.parse_data(llm.get('data')) or extrair_data_documento(texto)
+    else:
+        protocolo  = extrair_protocolo(texto)
+        tipo       = extrair_tipo(texto)
+        assunto    = extrair_assunto(texto)
+        reclamante = extrair_reclamante(texto, tipo)
+        data_doc   = extrair_data_documento(texto)
+
     unidade    = extrair_unidade(texto)
-    data_doc   = extrair_data_documento(texto)
-    tipo       = extrair_tipo(texto)
-    assunto    = extrair_assunto(texto)
-    reclamante = extrair_reclamante(texto, tipo)
     base_prazo = data_recebimento or data_doc
     prazo      = (base_prazo + timedelta(days=prazo_dias)) if base_prazo else None
 
