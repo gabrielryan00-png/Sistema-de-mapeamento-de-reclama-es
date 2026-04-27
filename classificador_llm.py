@@ -100,24 +100,18 @@ def parse_data(valor: Optional[str]) -> Optional[date]:
 
 def _ollama(prompt: str, cfg: dict) -> Optional[dict]:
     try:
-        import urllib.request
+        import requests as _req
         model = cfg.get('llm_model', 'llama3.2')
         base  = cfg.get('ollama_url', 'http://localhost:11434').rstrip('/')
-        payload = json.dumps({
+        resp  = _req.post(f'{base}/api/generate', json={
             'model':   model,
             'prompt':  prompt,
             'format':  'json',
             'stream':  False,
             'options': {'temperature': 0.1, 'num_predict': 400},
-        }).encode()
-        req = urllib.request.Request(
-            f'{base}/api/generate',
-            data=payload,
-            headers={'Content-Type': 'application/json'},
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            body = json.loads(resp.read())
-        return _parse_json(body.get('response', ''))
+        }, timeout=60)
+        resp.raise_for_status()
+        return _parse_json(resp.json().get('response', ''))
     except Exception as e:
         print(f'[LLM/Ollama] {e}')
         return None
@@ -125,30 +119,25 @@ def _ollama(prompt: str, cfg: dict) -> Optional[dict]:
 
 def _groq(prompt: str, cfg: dict) -> Optional[dict]:
     try:
-        import urllib.request
+        import requests as _req
         api_key = cfg.get('groq_api_key', '').strip()
         if not api_key:
             print('[LLM/Groq] groq_api_key não configurado em config.json')
             return None
         model = cfg.get('llm_model', 'llama-3.1-8b-instant')
-        payload = json.dumps({
-            'model':           model,
-            'messages':        [{'role': 'user', 'content': prompt}],
-            'temperature':     0.1,
-            'max_tokens':      400,
-            'response_format': {'type': 'json_object'},
-        }).encode()
-        req = urllib.request.Request(
+        resp  = _req.post(
             'https://api.groq.com/openai/v1/chat/completions',
-            data=payload,
-            headers={
-                'Content-Type':  'application/json',
-                'Authorization': f'Bearer {api_key}',
+            headers={'Authorization': f'Bearer {api_key}'},
+            json={
+                'model':       model,
+                'messages':    [{'role': 'user', 'content': prompt}],
+                'temperature': 0.1,
+                'max_tokens':  400,
             },
+            timeout=20,
         )
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            body = json.loads(resp.read())
-        content = body['choices'][0]['message']['content']
+        resp.raise_for_status()
+        content = resp.json()['choices'][0]['message']['content']
         return _parse_json(content)
     except Exception as e:
         print(f'[LLM/Groq] {e}')
