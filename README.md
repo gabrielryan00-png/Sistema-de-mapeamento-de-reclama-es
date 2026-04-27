@@ -1,14 +1,14 @@
 # Sistema de Mapeamento de Reclamações
 
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python&logoColor=white)
-![Flask](https://img.shields.io/badge/Flask-3.x-black?logo=flask)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.11x-009688?logo=fastapi&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
 ![License](https://img.shields.io/badge/Licença-Uso%20Interno-lightgrey)
 ![Status](https://img.shields.io/badge/Status-Ativo-brightgreen)
 
 > **Ferramenta de controle gerencial e auditoria territorial de reclamações e elogios das Unidades de Saúde da Família (USF) — Prefeitura Municipal de Suzano · SP**
 
-Sistema que automatiza o ciclo completo de uma ouvidoria pública de saúde: captura de e-mails com documentos anexos, extração por OCR, registro auditável em planilha Excel e dashboard web interativo com visão territorial.
+Sistema que automatiza o ciclo completo de uma ouvidoria pública de saúde: leitura autônoma de e-mails via agente LLM, extração por OCR, classificação inteligente, registro auditável em planilha Excel e dashboard web interativo com visão territorial.
 
 ---
 
@@ -16,13 +16,15 @@ Sistema que automatiza o ciclo completo de uma ouvidoria pública de saúde: cap
 
 - [Visão Geral](#visão-geral)
 - [Funcionalidades](#funcionalidades)
+- [Agente Autônomo](#agente-autônomo)
+- [Classificação LLM](#classificação-llm)
 - [Arquitetura](#arquitetura)
 - [Instalação Rápida](#instalação-rápida)
 - [Configuração](#configuração)
 - [Como Usar](#como-usar)
 - [Dashboard Web](#dashboard-web)
 - [API REST](#api-rest)
-- [Documentação Completa](#documentação-completa)
+- [Agendamento](#agendamento)
 - [Estrutura do Projeto](#estrutura-do-projeto)
 - [Stack](#stack)
 
@@ -31,36 +33,51 @@ Sistema que automatiza o ciclo completo de uma ouvidoria pública de saúde: cap
 ## Visão Geral
 
 ```
-E-mail Gmail ──► Extração OCR ──► ouvidorias.xlsx ──► Dashboard Web
-                 (PDF + imagem)     (auditoria)       localhost:7731
-                      │                  ▲
-                      │                  │ API REST
-                      └─ Formulário manual (quando OCR falha)
+Gmail (IMAP)
+     │
+     ▼
+Agente Autônomo (LLM)  ◄──  Groq API (llama-3.3-70b)
+     │  ├─ Classifica: OUVIDORIA vs RESPOSTA
+     │  ├─ Extrai: protocolo, unidade, reclamante, data, assunto
+     │  └─ Vincula respostas a ouvidorias existentes
+     ▼
+ouvidorias.xlsx  ──►  Dashboard Web (localhost:7731)
+                           React 18 · FastAPI
 ```
-
-O sistema funciona em dois modos:
 
 | Modo | Descrição |
 |------|-----------|
-| **Automático** | Lê e-mails, extrai dados de PDFs/imagens por OCR, classifica e grava na planilha |
-| **Manual** | Dashboard web com formulário para entrada quando o OCR falha ou para registros diretos |
+| **Agente autônomo** | LLM raciocina sobre cada e-mail, classifica e registra autonomamente |
+| **Cron diário 08h** | Executa automaticamente todo dia das 8h, processa e-mails novos |
+| **Dashboard manual** | Formulários para entrada e edição quando necessário |
+| **Busca manual** | Botão "Buscar E-mails" com seleção de período no dashboard |
 
 ---
 
 ## Funcionalidades
 
-### 🔄 Processamento automático
-- Leitura de caixa de entrada Gmail via **IMAP**
-- Extração de dados de **PDFs e imagens** (pdfplumber + pytesseract)
-- Classificação automática: **ouvidoria nova** vs **resposta da unidade**
-- Normalização de nomes de USF via catálogo com aliases configuráveis
-- Gravação automática em `ouvidorias.xlsx` com formatação institucional
+### 🤖 Agente autônomo
+- Agente LLM com **Groq function calling** (llama-3.3-70b-versatile)
+- Raciocínio contextual: identifica se uma resposta corresponde a uma ouvidoria existente
+- Executa ferramentas: listar e-mails, baixar PDFs, salvar, vincular, mover para labels Gmail
+- Retry automático em rate limit · Compactação de histórico para contextos longos
+
+### 🔍 OCR + Extração
+- Leitura de **PDFs e imagens** (pdfplumber + pytesseract)
+- Fallback automático para OCR forçado quando texto digital é insuficiente
+- Extrai: protocolo (P.O. XXXXX/AAAA), unidade, reclamante, data, assunto
+
+### 🧠 Classificação LLM
+- **Groq API** (gratuita, 14.400 req/dia) com llama-3.1-8b-instant
+- Alternativa: **Ollama** local (zero custo, zero internet)
+- Fallback automático para regex se confiança < 0.6 ou LLM indisponível
+- Classifica OUVIDORIA vs RESPOSTA com confiança 0–1
 
 ### 📊 Dashboard web — `localhost:7731`
-- **Command Center** — KPIs globais, ranking por unidade, tabela filtrável com exportação CSV
+- **Command Center** — KPIs globais, ranking por unidade, tabela filtrável, exportação CSV
 - **Triagem** — Inbox priorizado por urgência legal (vencido → crítico → atenção → no prazo)
 - **Mapa territorial** — Mapa esquemático de Suzano com 12 pins coloridos por status
-- **Histórico** — Tabela de respondidas com tempo de resposta e indicador de prazo
+- Auto-refresh a cada 60 segundos
 
 ### ⚖️ Controle de prazos — Lei 13.460/2017
 | Tier | Critério | Visual |
@@ -71,17 +88,80 @@ O sistema funciona em dois modos:
 | No prazo | > 10 dias | Verde |
 | Resolvida | Respondida / Fechada | Cinza |
 
-### 🛠️ Ações de gestão (dashboard)
-- **Nova ouvidoria** — Formulário completo com protocolo automático
-- **Encaminhar** — Muda status para `ENCAMINHADA` com confirmação
-- **Registrar resposta** — Registra data e muda status para `RESPONDIDA`
-- **Editar** — Altera qualquer campo de ouvidoria existente
-- **Exportar CSV** — Exporta lista filtrada atual
+### 🛠️ Ações no dashboard
+- **Nova ouvidoria** — formulário completo
+- **Buscar e-mails** — busca com seleção de período e log em tempo real
+- **Enviar lembretes** — e-mails de cobrança para gestores de unidades selecionadas
+- **Deletar** — remoção com confirmação
+- **Encaminhar / Registrar resposta / Editar** — gestão de ciclo de vida
+- **Auto-scan** — indicador de status do scheduler no toolbar
 
-### 📧 Agendador de cobranças
-- Envio automático de e-mails de cobrança aos gestores de unidade
-- Intervalo mínimo configurável entre cobranças (evita spam)
-- Log completo de cobranças enviadas
+### 📧 Cobranças automáticas
+- Envio de e-mails de cobrança para gestores de unidade com ouvidorias pendentes
+- Filtro por unidade · Intervalo mínimo entre cobranças · Log completo
+
+---
+
+## Agente Autônomo
+
+O agente `agente_ouvidoria.py` usa **Groq function calling** para processar e-mails de forma autônoma:
+
+```bash
+# Processar e-mails novos (não lidos)
+python agente_ouvidoria.py
+
+# Reprocessar todos os e-mails (INBOX + labels Ouvidorias)
+python agente_ouvidoria.py --reprocessar
+```
+
+**Ferramentas disponíveis para o agente:**
+
+| Ferramenta | Descrição |
+|-----------|-----------|
+| `listar_emails_pendentes` | Lista e-mails com PDF relacionados a ouvidorias |
+| `baixar_e_ler_pdf` | Baixa PDF e extrai texto (OCR se necessário) |
+| `buscar_ouvidoria_por_protocolo` | Consulta Excel por número de protocolo |
+| `salvar_ouvidoria` | Grava nova ouvidoria no Excel e move PDF |
+| `vincular_resposta` | Atualiza registro existente com a resposta |
+| `mover_e_marcar_processado` | Aplica labels Gmail corretas |
+
+**Fluxo de decisão do agente:**
+```
+listar_emails_pendentes
+    └─ para cada e-mail com PDF:
+        baixar_e_ler_pdf
+            ├─ É OUVIDORIA? → salvar_ouvidoria
+            └─ É RESPOSTA?  → buscar_ouvidoria_por_protocolo
+                                  └─ vincular_resposta
+        mover_e_marcar_processado
+```
+
+---
+
+## Classificação LLM
+
+Configurar em `config.json`:
+
+```json
+{
+  "llm_backend":          "groq",
+  "llm_model":            "llama-3.1-8b-instant",
+  "groq_api_key":         "<sua-chave-gratuita>",
+  "llm_confianca_minima": 0.6
+}
+```
+
+**Opção local (sem internet):**
+```bash
+# Instalar Ollama: https://ollama.com
+ollama pull llama3.2
+
+# config.json:
+# "llm_backend": "ollama"
+# "llm_model":   "llama3.2"
+```
+
+> Groq gratuito: [console.groq.com](https://console.groq.com) — 14.400 req/dia, sem cartão de crédito.
 
 ---
 
@@ -90,29 +170,23 @@ O sistema funciona em dois modos:
 ```
 ouvidoria_bot/
 │
-├── ouvidoriabot.py          # ► App principal Tkinter (3 abas)
-├── dashboard_server.py      # ► Servidor Flask porta 7731 (API + frontend)
+├── agente_ouvidoria.py      # ► Agente autônomo LLM (Groq function calling)
+├── classificador_llm.py     # ► Classificação via Groq ou Ollama
+├── dashboard_server.py      # ► Servidor FastAPI porta 7731 (API + frontend)
+├── ouvidoriagmail.py        # ► Leitor IMAP/Gmail + pipeline OCR
+├── ouvidoriabot.py          # ► App principal Tkinter
 ├── constantes.py            # ► Catálogo USFs, colunas Excel, classificadores
-├── banco.py                 # ► SQLite — e-mails dos gestores
-├── ouvidoriagmail.py        # ► Leitor IMAP/Gmail
 ├── cobrar.py                # ► Motor de cobranças por e-mail
-├── cobranca_gui.py          # ► Interface de cobranças
-├── run.py                   # ► Ponto de entrada CLI
+├── banco.py                 # ► SQLite — e-mails dos gestores
 │
 ├── dashboard/               # ► Frontend React (sem build step)
 │   ├── data.jsx             #   Camada de dados e API client
-│   ├── command-center.jsx   #   Painel KPIs + tabela gerencial
-│   ├── split-triagem.jsx    #   Inbox + formulários + histórico
+│   ├── command-center.jsx   #   KPIs + busca e-mails + scheduler + deletar
+│   ├── split-triagem.jsx    #   Inbox + formulários + histórico + deletar
 │   └── mapa-unidades.jsx    #   Mapa territorial com pins
 │
-├── docs/                    # ► Documentação
-│   ├── INSTALACAO.md
-│   ├── CONFIGURACAO.md
-│   ├── USO.md
-│   └── API.md
-│
-├── icons/                   # ► Ícones do aplicativo
-├── scripts/                 # ► Utilitários (geração de ícones)
+├── agente.log               # ► Log do agente (gerado em runtime, gitignore)
+├── config.json              # ► Credenciais e opções (gitignore)
 ├── config.json.example      # ► Template de configuração
 └── requirements.txt         # ► Dependências Python
 ```
@@ -123,98 +197,137 @@ ouvidoria_bot/
 
 ```bash
 # 1. Clonar
-git clone https://github.com/gabrielryan00-png/Sistema-de-mapeamento-de-reclama-es.git
+git clone https://github.com/ryandelima27/Sistema-de-mapeamento-de-reclama-es.git
 cd Sistema-de-mapeamento-de-reclama-es
 
-# 2. Instalar tudo (Linux/macOS)
-make install
+# 2. Criar ambiente virtual e instalar dependências
+python -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 
 # 3. Configurar
 cp config.json.example config.json
-# Edite config.json com seu e-mail e senha de app
+# Edite config.json com seu e-mail, senha de app e chave Groq
 
-# 4. Iniciar
-python ouvidoriabot.py
+# 4. Iniciar o dashboard
+python dashboard_server.py
+# Acesse http://localhost:7731
 ```
 
-> **Windows:** veja [docs/INSTALACAO.md](docs/INSTALACAO.md)  
-> **Tesseract OCR** e **Poppler** precisam ser instalados separadamente — instruções em [docs/INSTALACAO.md](docs/INSTALACAO.md)
+> **Tesseract OCR** e **Poppler** precisam ser instalados separadamente.  
+> Linux: `sudo apt install tesseract-ocr poppler-utils`  
+> Windows: veja [README_INSTALL.md](README_INSTALL.md)
 
 ---
 
 ## Configuração
 
-Copie `config.json.example` para `config.json` e preencha:
-
 ```json
 {
-  "email":               "ouvidoria@exemplo.gov.br",
-  "senha_app":           "xxxx xxxx xxxx xxxx",
-  "remetente_ouvidoria": "",
-  "pasta_base":          "ouvidorias",
-  "prazo_dias":          "30",
-  "tesseract_path":      "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
-  "remover_arquivos_depois": false,
-  "scheduler_enabled":   false,
-  "scheduler_interval_min": 60
+  "email":                  "ouvidoria@exemplo.gov.br",
+  "senha_app":              "xxxx xxxx xxxx xxxx",
+  "remetente_ouvidoria":    "",
+  "pasta_base":             "ouvidorias",
+  "prazo_dias":             "10",
+  "tesseract_path":         "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+  "remover_arquivos_depois": true,
+
+  "usar_agente":            true,
+  "scheduler_enabled":      false,
+  "scheduler_interval_min": 20,
+
+  "llm_backend":            "groq",
+  "llm_model":              "llama-3.1-8b-instant",
+  "groq_api_key":           "<sua-chave>",
+  "ollama_url":             "http://localhost:11434",
+  "llm_confianca_minima":   0.6
 }
 ```
 
-> ⚠️ `config.json` está no `.gitignore` — **nunca versionar credenciais**
+| Campo | Descrição |
+|-------|-----------|
+| `usar_agente` | `true` usa o agente LLM · `false` usa pipeline regex |
+| `scheduler_enabled` | Liga o scheduler interno do dashboard |
+| `llm_backend` | `"groq"`, `"ollama"` ou `"disabled"` |
+| `llm_confianca_minima` | Abaixo desse valor, cai no fallback regex |
 
-Documentação completa: [docs/CONFIGURACAO.md](docs/CONFIGURACAO.md)
+> ⚠️ `config.json` está no `.gitignore` — **nunca versionar credenciais**
 
 ---
 
 ## Como Usar
 
-1. Inicie o sistema: `python ouvidoriabot.py`
-2. O servidor do dashboard sobe automaticamente em `http://localhost:7731`
-3. Use a aba **Processar** para buscar e-mails no período desejado
-4. Clique em **🌐 Dashboard Web** para abrir o painel no navegador
-5. Use o botão **+ Nova Ouvidoria** para inserir manualmente quando o OCR falhar
+### Dashboard web
+```bash
+python dashboard_server.py
+# Acesse http://localhost:7731
+```
 
-Guia completo: [docs/USO.md](docs/USO.md)
+### Agente manual
+```bash
+python agente_ouvidoria.py              # e-mails novos
+python agente_ouvidoria.py --reprocessar  # todos os e-mails
+```
+
+### Acompanhar log do agente
+```bash
+tail -f agente.log
+```
 
 ---
 
 ## Dashboard Web
 
-O dashboard é uma aplicação React servida pelo Flask, acessível em `http://localhost:7731`.
+Acessível em `http://localhost:7731`
 
-| Vista | Acesso | Descrição |
-|-------|--------|-----------|
-| Command Center | Aba Dashboard | KPIs, gráficos, tabela gerencial |
-| Triagem | Aba Triagem | Inbox priorizado por urgência |
-| Mapa | Botão ⊕ Mapa | Mapa de Suzano com pins das USFs |
-| Histórico | Segmento Resolvidas | Tabela de ouvidorias respondidas |
-
-O painel atualiza os dados automaticamente a cada 60 segundos.
+| Funcionalidade | Localização |
+|----------------|-------------|
+| KPIs + tabela gerencial | Aba "Visão geral" |
+| Triagem por urgência | Aba "Triagem avançada" |
+| Mapa de Suzano | Botão no toolbar |
+| Buscar e-mails (com log) | Botão 📥 no toolbar |
+| Enviar lembretes | Botão 📧 no toolbar |
+| Status auto-scan | Indicador ● no toolbar |
+| Deletar ouvidoria | Botão 🗑 no detalhe |
 
 ---
 
 ## API REST
 
-Servidor local em `http://localhost:7731/api`
+Servidor em `http://localhost:7731/api`
 
 | Método | Endpoint | Descrição |
 |--------|----------|-----------|
 | `GET` | `/api/ouvidorias` | Lista todas as ouvidorias |
 | `POST` | `/api/ouvidorias` | Cria nova ouvidoria |
 | `PATCH` | `/api/ouvidorias/{protocolo}` | Atualiza campos |
-
-Documentação completa: [docs/API.md](docs/API.md)
+| `DELETE` | `/api/ouvidorias/{protocolo}` | Remove ouvidoria |
+| `POST` | `/api/processar-emails` | Inicia busca de e-mails (background job) |
+| `GET` | `/api/jobs/{job_id}` | Status e log de um job em execução |
+| `POST` | `/api/cobrar` | Dispara e-mails de cobrança |
+| `GET` | `/api/scheduler/status` | Status do scheduler automático |
+| `POST` | `/api/scheduler/start` | Ativa scheduler com intervalo configurável |
+| `POST` | `/api/scheduler/stop` | Desativa scheduler |
+| `POST` | `/api/scheduler/executar-agora` | Executa ciclo imediatamente |
 
 ---
 
-## Documentação Completa
+## Agendamento
 
-| Documento | Conteúdo |
-|-----------|----------|
-| [docs/INSTALACAO.md](docs/INSTALACAO.md) | Instalação detalhada Linux, macOS e Windows |
-| [docs/CONFIGURACAO.md](docs/CONFIGURACAO.md) | Todas as opções de config.json e banco de dados |
-| [docs/USO.md](docs/USO.md) | Guia de uso completo: OCR, dashboard, cobranças |
-| [docs/API.md](docs/API.md) | Referência completa da API REST |
+O agente roda automaticamente via **cron** todo dia às **08h**:
+
+```bash
+# Ver agendamento atual
+crontab -l
+
+# Acompanhar execução
+tail -f /home/<usuario>/ouvidoria_bot/agente.log
+```
+
+Cron configurado:
+```
+0 8 * * * /path/to/venv/bin/python /path/to/agente_ouvidoria.py >> agente.log 2>&1
+```
 
 ---
 
@@ -243,22 +356,24 @@ Documentação completa: [docs/API.md](docs/API.md)
 
 | Camada | Tecnologia |
 |--------|------------|
-| Interface desktop | Python · Tkinter · tkcalendar |
+| Agente LLM | Groq API · llama-3.3-70b-versatile · function calling |
+| Classificação | Groq API · llama-3.1-8b-instant · Ollama (local) |
 | OCR e extração | pdfplumber · pytesseract · pdf2image · Pillow |
 | E-mail | imapclient · pyzmail · smtplib |
-| Dados | openpyxl · SQLite3 |
-| Servidor web | Flask · flask-cors |
-| Agendamento | APScheduler |
+| Servidor web | FastAPI · uvicorn · APScheduler |
 | Dashboard | React 18 · Babel standalone · CSS oklch |
+| Dados | openpyxl · SQLite3 |
+| Interface desktop | Python · Tkinter · tkcalendar |
+| HTTP client | requests |
 
 ---
 
 ## Segurança
 
-- `config.json` está no `.gitignore` — credenciais nunca versionadas
-- `ouvidorias/` e `ouvidorias.db` estão no `.gitignore` — dados de cidadãos nunca versionados
-- O servidor Flask escuta apenas em `127.0.0.1` — não exposto na rede local
-- Reclamantes anônimos tratados sem armazenar nome
+- `config.json` no `.gitignore` — credenciais nunca versionadas
+- `ouvidorias/` e `ouvidorias.db` no `.gitignore` — dados de cidadãos nunca versionados
+- Servidor FastAPI escuta apenas em `127.0.0.1` — não exposto na rede
+- Chave Groq lida em tempo de execução do `config.json`
 
 ---
 
